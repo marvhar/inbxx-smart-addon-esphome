@@ -1,0 +1,2773 @@
+# =========================================================================
+# INBXX Smart Add-on - ESPHome firmware
+# https://github.com/marvhar/inbxx-smart-addon-esphome
+#
+# Core configuration (adopted by users via the ESPHome dashboard).
+# Update / provisioning extras live in inbxx-smart-addon.factory.yaml.
+#
+# Board: Arduino Nano ESP32 (ESP32-S3, 16 MB flash, octal PSRAM)
+# =========================================================================
+
+# ===================== Hardware pins =====================
+# PIN_FAN 3
+# PIN_ACTION_BUTTON 6
+# PIN_BUTTON_PLUS 7
+# PIN_BUTTON_MINUS 8
+# PIN_PRINT_STATUS 9   // Printer status (M262 P0 B0 (set as output), M264 P0 B1/B0 start/stop print)
+# PIN_HEATER 10
+# NTC_PIN A7 -> GPIO14
+
+
+substitutions:
+  # Strings
+  str_printing: "Printing"
+  str_standby: "Standby"
+  str_head_setp: "Setpoints"
+  str_head_status: "Status"
+  str_head_profiles: "Profiles"
+  str_mode_1: "Off"
+  str_mode_2: "Auto"
+  str_mode_3: "Dry"
+  str_error_ok: "System OK"
+  str_error_start: "System start"
+  str_error_sht: "SHT reading Error"
+  str_error_ntc: "NTC reading Error"
+  str_error_heater: "Heater max. time"
+  str_error_overtemp_chamber: "Chamber overtemp."
+  str_error_overtemp_heater: "Heater overtemp."
+  str_error_heat_no_rise: "Heater no effect"
+  str_error_heat_stuck: "Heater stuck on"
+  str_error_reset_hint: "Hold to reset"
+
+  # Safety
+  SAFETY_MAX_CHAMBER_TEMP: "60.0"    # SHT4x: chamber shutdown limit (°C)
+  SAFETY_MAX_NTC_TEMP: "65.0"        # NTC: heater shutdown limit (°C) - adapt to heater!
+  SAFETY_NTC_PLAUSIBLE_MAX: "100.0"  # NTC above = short circuit / sensor fault
+  SAFETY_MIN_VALID_TEMP: "10.0"      # below = broken wire / sensor fault
+  SAFETY_SENSOR_TIMEOUT_S: "20"      # no new value within this time = sensor fault
+  SAFETY_STARTUP_GRACE_S: "30"       # max. time after boot until both sensors must be valid
+
+  # Heater supervision
+  SAFETY_HEATER_HIGH_LEVEL: "0.9"    # from this power (0..1) the heater counts as "full on"
+  SAFETY_HEATER_MAX_FULL_S: "3600"   # Code 4: max. continuous time at full power (s)
+  SAFETY_HEAT_CHECK_S: "180"         # Code 7: after this time at full power the NTC ...
+  SAFETY_HEAT_MIN_RISE: "5.0"        #         ... must have risen by at least this many K
+  SAFETY_STUCK_DELAY_S: "120"        # Code 8: wait time after heater off (residual heat) ...
+  SAFETY_STUCK_RISE: "5.0"           #         ... afterwards NTC must not rise more than this many K
+  SAFETY_STUCK_OFFSET: "10.0"        #         ... while NTC is this many K above chamber temp.
+
+  # Heater power limiter (protects bimetal switch KSD9700 70°C, tolerance ±5K)
+  HEATER_LIMIT_TEMP: "58.0"          # NTC temperature at which power reaches 0%
+  HEATER_LIMIT_BAND: "8.0"           # band below it with linear power reduction (K)
+  HEATER_LIMIT_LOOKAHEAD_S: "30.0"   # prediction: T + slope * this time (s)
+
+  # Fan control (fan behind heating element, values 0..1)
+  FAN_MIN_HEATING: "0.4"             # min. speed as soon as the heater is on
+  FAN_NTC_RAMP_START: "45.0"         # NTC from here: fan ramps up linearly ...
+  FAN_NTC_RAMP_END: "55.0"           # ... up to 100% here
+  FAN_AFTERRUN_MIN_S: "60"           # min. after-run after heater off (s)
+  FAN_AFTERRUN_DELTA: "5.0"          # after-run until NTC < chamber temp. + this many K
+  FAN_AFTERRUN_ABS: "40.0"           # after-run NTC limit if SHT is invalid (°C)
+  FAN_AFTERRUN_BLIND_S: "180"        # after-run time if NTC is invalid (s)
+  FAN_CIRCULATION: "0.25"            # circulation in Auto+printing or Dry
+
+  # IOs
+  PIN_NTC: GPIO14
+  NTC_ref_voltage: 3.3
+  PIN_PRINTER_STATUS: GPIO18
+  PIN_FAN: GPIO6
+  PIN_HEATER: GPIO21
+  PIN_BUTTON_PLUS: GPIO10
+  PIN_BUTTON_MINUS: GPIO17
+  PIN_BUTTON_ACTION: GPIO9
+  PIN_NEOPIXEL: GPIO47
+
+  # Numbers
+  #NUM_LEDS_COMPL: 6
+  NUM_LEDS_SEG1: 4
+  NUM_LEDS_SEG2: 8
+
+  MAX_TEMP: 55.0                     # keep >= 5 K below SAFETY_MAX_CHAMBER_TEMP
+  MIN_TEMP: 30.0
+  MAX_HUM: 100
+  MIN_HUM: 20
+
+  MIN_DRY_HOURS: "1"
+  MAX_DRY_HOURS: "12"
+  str_dry_time: "Dry time:"
+
+  # Status LED (segment 1)
+  LED_BRIGHTNESS: "0.8"              # brightness 0..1
+  MIN_LED_TIMEOUT: "1"               # standby light timeout: adjustable from ... (min)
+  MAX_LED_TIMEOUT: "60"              # ... to (min)
+
+  HUM_HYSTERESIS: "3"                # humidity hold: heat above SET_HUM + this value, off below SET_HUM
+
+  SCREEN_OFF_SECONDS: 45
+  BOOT_SCREEN_SECONDS: 3             # duration of boot screen (logo) after start
+
+  # Open door detection via SHT4x (mounted at the door)
+  str_door_open: "Door open"
+  DOOR_DROP_K: "2.0"                 # door open: temperature drops by at least this many K ...
+  DOOR_DROP_WINDOW_S: "60"           # ... within this time (s, max. 75)
+  DOOR_CLOSE_STABLE_S: "120"         # door closed: no new minimum for this many s ...
+  DOOR_CLOSE_RISE_K: "0.5"           # ... or temperature this many K above minimum again
+
+
+globals:
+  - id: SET_TEMP
+    type: int
+    restore_value: true
+    initial_value: '40'
+
+  - id: SET_HUM
+    type: int
+    restore_value: true
+    initial_value: '30'
+
+  - id: selected_value
+    type: int
+    initial_value: '0'
+
+  - id: edit_mode
+    type: bool
+    initial_value: 'false'
+
+  - id: set_page_edit          # edit_mode currently applies to the setpoints page
+    type: bool
+    initial_value: 'false'
+
+  - id: profile_1_name
+    type: std::string
+    restore_value: true
+    max_restore_data_length: 10
+    initial_value: '"PLA"'
+
+  - id: profile_2_name
+    type: std::string
+    restore_value: true
+    max_restore_data_length: 10
+    initial_value: '"ABS"'
+
+  - id: profile_3_name
+    type: std::string
+    restore_value: true
+    max_restore_data_length: 10
+    initial_value: '"PETG"'
+
+  - id: profile_1_temp
+    type: int
+    restore_value: true
+    initial_value: '40'
+
+  - id: profile_2_temp
+    type: int
+    restore_value: true
+    initial_value: '55'
+
+  - id: profile_3_temp
+    type: int
+    restore_value: true
+    initial_value: '50'
+
+  - id: profile_1_hum
+    type: int
+    restore_value: true
+    initial_value: '30'
+
+  - id: profile_2_hum
+    type: int
+    restore_value: true
+    initial_value: '30'
+
+  - id: profile_3_hum
+    type: int
+    restore_value: true
+    initial_value: '30'
+
+  - id: error_code
+    type: int
+    initial_value: '1' # 0=no Error, 1=StartUp, 2=SHT Error, 3=NTC Error, 4=Heater max. Time, 5=Chamber overtemp, 6=Heater overtemp, 7=Heater no effect, 8=Heater stuck on
+
+  # Safety: timestamp (millis) of the last valid sensor value
+  - id: sht_last_update
+    type: uint32_t
+    initial_value: '0'
+
+  - id: ntc_last_update
+    type: uint32_t
+    initial_value: '0'
+
+  # Dry: max. duration (h) and elapsed time (min) - survives power loss
+  - id: DRY_HOURS
+    type: int
+    restore_value: true
+    initial_value: '6'
+
+  - id: dry_elapsed_min
+    type: int
+    restore_value: true
+    initial_value: '0'
+
+  # Status LED
+  - id: LED_TIMEOUT_MIN        # standby light off after x minutes
+    type: int
+    restore_value: true
+    initial_value: '5'
+
+  - id: led_standby_on         # standby light (white) currently active
+    type: bool
+    initial_value: 'false'
+
+  - id: was_printing           # printer was printing (for "print finished")
+    type: bool
+    initial_value: 'false'
+
+  - id: print_finished         # print finished, not yet acknowledged -> green
+    type: bool
+    initial_value: 'false'
+
+  # Door open (detected via fast temperature drop at SHT4x)
+  - id: door_open
+    type: bool
+    initial_value: 'false'
+
+  # System would heat if the door were closed -> door detection only active then
+  - id: heat_wanted
+    type: bool
+    initial_value: 'false'
+
+  # Request: clear door detection history (after acknowledge)
+  - id: door_hist_clear
+    type: bool
+    initial_value: 'false'
+
+  # Humidity hold: heat request with hysteresis
+  - id: hum_heat_active
+    type: bool
+    initial_value: 'false'
+
+  # Safety: current check result (not latched), 0 = all OK
+  - id: safety_check_code
+    type: int
+    initial_value: '1'
+
+  # Safety loop: shared results between its steps (see interval 1s)
+  - id: sht_ok                 # SHT4x delivers fresh + plausible values
+    type: bool
+    initial_value: 'false'
+
+  - id: ntc_ok                 # NTC delivers fresh + plausible values
+    type: bool
+    initial_value: 'false'
+
+  - id: heater_check_code      # result of heater supervision (0/4/7/8)
+    type: int
+    initial_value: '0'
+
+  - id: fault_changed          # error_code changed in this cycle
+    type: bool
+    initial_value: 'false'
+
+  # Safety: power actually output to the heater (0..1)
+  - id: heater_level
+    type: float
+    initial_value: '0.0'
+
+  # Power request of the PID (0..1), before limiting
+  - id: heater_request
+    type: float
+    initial_value: '0.0'
+
+  # Max. power allowed by the NTC limiter (0..1)
+  - id: heater_limit
+    type: float
+    initial_value: '0.0'
+
+  # Smoothed NTC temperature slope (K/s)
+  - id: ntc_slope
+    type: float
+    initial_value: '0.0'
+
+  # Fan: speed actually output (0..1)
+  - id: fan_level
+    type: float
+    initial_value: '0.0'
+
+
+
+esphome:
+  name: inbxx-smart-addon
+  friendly_name: INBXX Smart Add-on
+  # Same firmware for all devices -> append MAC address to the name
+  name_add_mac_suffix: true
+  on_boot:
+    priority: -100
+    then:
+      # Clamp restored setpoints to the current limits (MIN/MAX_TEMP may have changed)
+      - lambda: |-
+          auto clamp_t = [](int v) { return std::min(std::max(v, (int) ${MIN_TEMP}), (int) ${MAX_TEMP}); };
+          id(SET_TEMP)       = clamp_t(id(SET_TEMP));
+          id(profile_1_temp) = clamp_t(id(profile_1_temp));
+          id(profile_2_temp) = clamp_t(id(profile_2_temp));
+          id(profile_3_temp) = clamp_t(id(profile_3_temp));
+      - script.execute: screensaver
+      - script.execute: update_labels_page_main
+      - script.execute: update_profile_page
+      - script.execute: update_labels_page_profile
+      - script.execute: update_settings_page
+      - script.execute: update_error_display
+      - script.execute: update_printer_label
+      - delay: ${BOOT_SCREEN_SECONDS}s # Boot screen: show logo, then reveal the UI
+      - lvgl.widget.hide: boot_box
+
+
+esp32:
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    advanced:
+      flash_chip: gd
+    sdkconfig_options:
+      CONFIG_COMPILER_OPTIMIZATION_PERF: "y"
+      CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240: "y"
+
+logger:
+  level: WARN
+
+# Required for Home Assistant and the dashboard import.
+# No encryption key in the public config - users get their own on adoption.
+api:
+
+ota:
+  - platform: esphome
+    # Main loop is blocked during OTA -> display is not polled.
+    # ota_refresh renders LVGL immediately AND pushes the buffer to the OLED.
+    on_begin:
+    - lambda: |-
+        id(oled_1).turn_on();
+        lv_obj_move_foreground(id(ota_box));   // above status row / error box
+    - lvgl.resume:
+    - lvgl.widget.show: ota_box
+    - lvgl.label.update:
+        id: ota_label
+        text: "Updating..."
+    - lvgl.bar.update:
+        id: ota_bar
+        value: 0
+        animated: false
+    - script.execute: ota_refresh
+    on_progress:
+    - lvgl.bar.update:
+        id: ota_bar
+        value: !lambda return x;
+        animated: false
+    - lvgl.label.update:
+        id: ota_label
+        text:
+          format: "Updating %.0f%%"
+          args: [x]
+    - script.execute: ota_refresh
+    on_end:
+    - lvgl.bar.update:
+        id: ota_bar
+        value: 100
+        animated: false
+    - lvgl.label.update:
+        id: ota_label
+        text: "Done, rebooting"
+    - script.execute: ota_refresh
+    on_error:
+    - lvgl.label.update:
+        id: ota_label
+        text:
+          format: "Failed (err %u)"
+          args: [x]
+    - script.execute: ota_refresh
+
+
+# WiFi is provisioned by the user: without credentials the device opens a
+# hotspot (named after the device) with a captive portal.
+wifi:
+  ap:
+
+captive_portal:
+
+web_server:
+
+
+############### PSRAM ###################################################
+#########################################################################
+psram:
+  mode: octal
+
+
+############### I2C Bus #################################################
+#########################################################################
+i2c:
+  sda: 11
+  scl: 12
+  id: i2c_bus_1
+  frequency: 400kHz
+
+
+############### FONTS ###################################################
+#########################################################################
+font:
+    # gfonts://family[@weight]
+  - file: "gfonts://Roboto"
+    id: roboto_l
+    size: 28
+
+  - file: "gfonts://Roboto"
+    id: roboto_m
+    size: 15
+    extras:
+      - file: "gfonts://Material+Symbols+Outlined"
+        glyphs: [
+          "\U0000e5d8", # arrow_upward   (NTC trend on status page)
+          "\U0000e5db", # arrow_downward
+          ]
+
+
+############### IMAGES ##################################################
+#########################################################################
+image:
+  - platform: file
+    file: "images/heater1_17x18.bmp"
+    id: heater_1
+    type: BINARY
+
+  - platform: file
+    file: "images/heater2_17x18.bmp"
+    id: heater_2
+    type: BINARY
+
+  - platform: file
+    file: "images/voxel3d_100x65.bmp"
+    id: voxel_img
+    type: BINARY
+
+  - platform: file
+    file: "images/wifi_18x18.bmp"
+    id: wifi_on_img
+    type: BINARY
+
+  - platform: file
+    file: "images/wifi_off_18x18.bmp"
+    id: wifi_off_img
+    type: BINARY
+
+  - platform: file
+    file: "images/FAN_run1_17x18.bmp"
+    id: fan_run1
+    type: BINARY
+
+  - platform: file
+    file: "images/FAN_run2_17x18.bmp"
+    id: fan_run2
+    type: BINARY
+
+  - platform: file
+    file: "images/FAN_still_17x18.bmp"
+    id: fan_still
+    type: BINARY
+
+
+
+############### Display Driver ##########################################
+#########################################################################
+# SH1107 128x128px
+display:
+  - platform: ssd1306_i2c
+    model: "SH1107 128x128"
+    id: oled_1
+    auto_clear_enabled: false
+    update_interval: 200ms # needed!! 'never' not working!
+    #address: 0x3C
+
+
+############### LVGL CONFIG, PAGES, WIDGETS #############################
+#########################################################################
+lvgl:
+  - id: lvgl_id
+    displays: oled_1
+    bg_color: black
+    text_color: white
+    rotation: 180
+    default_font: roboto_m
+    pages:
+      - id: lvgl_page_main
+        scrollbar_mode: "OFF"
+        widgets:
+          - label:
+              id: lvgl_lbl_main_state
+              text: "N/A"
+              x: 0
+              y: 0
+              width: 128
+              align: TOP_LEFT
+              long_mode: SCROLL_CIRCULAR
+              text_font: roboto_l
+
+          - label:
+              id: lvgl_lbl_main_temp
+              text: "Temp.: --,-°C"
+              x: 5
+              y: 38
+
+          - label:
+              id: lvgl_lbl_main_hum
+              text: "Hum.: --,-%"
+              x: 5
+              y: 58
+
+          - container:
+              width: 100%
+              height: 50
+              x: 5
+              y: 82
+              bg_color: black
+              text_color: white
+              layout:
+                type: flex
+                flex_flow: ROW
+                flex_align_main: START
+                flex_align_cross: CENTER
+              widgets:
+                - label:
+                    text: "Printer:"
+                    width: SIZE_CONTENT
+
+                - label:
+                    id: lvgl_lbl_main_pr_st
+                    text: "---"
+                    flex_grow: 1
+                    long_mode: SCROLL_CIRCULAR
+                    pad_left: 3
+
+      - id: lvgl_page_set
+        scrollbar_mode: "OFF"
+        widgets:
+          - label:
+              text: "${str_head_setp}"
+              width: 100%
+              align: TOP_LEFT
+              long_mode: SCROLL_CIRCULAR
+              text_font: roboto_l
+              y: 0
+
+          - container:
+              width: 100%
+              height: 22
+              y: 38
+              layout:
+                type: flex
+                flex_flow: ROW
+                flex_align_main: SPACE_BETWEEN
+                flex_align_cross: CENTER
+              widgets:
+                - label:
+                    text: "Temp.:"
+
+                - label:
+                    id: temp_value
+                    text: !lambda |-
+                      return str_sprintf("%d °C", id(SET_TEMP));
+                    text_align: RIGHT
+                    bg_opa: COVER
+                    bg_color: black
+                    pad_left: 3
+                    pad_right: 3
+
+          - container:
+              width: 100%
+              height: 22
+              y: 60
+              layout:
+                type: flex
+                flex_flow: ROW
+                flex_align_main: SPACE_BETWEEN
+                flex_align_cross: CENTER
+              widgets:
+                - label:
+                    text: "Humid.:"
+
+                - label:
+                    id: humidity_value
+                    text: !lambda |-
+                      return str_sprintf("%d %%", id(SET_HUM));
+                    text_align: RIGHT
+                    bg_opa: COVER
+                    bg_color: black
+                    pad_left: 3
+                    pad_right: 3
+
+          - container:
+              width: 100%
+              height: 22
+              y: 82
+              layout:
+                type: flex
+                flex_flow: ROW
+                flex_align_main: SPACE_BETWEEN
+                flex_align_cross: CENTER
+              widgets:
+                - label:
+                    text: "${str_dry_time}"
+
+                - label:
+                    id: dry_value
+                    text: !lambda |-
+                      return str_sprintf("%d h", id(DRY_HOURS));
+                    text_align: RIGHT
+                    bg_opa: COVER
+                    bg_color: black
+                    pad_left: 3
+                    pad_right: 3
+
+      - id: lvgl_page_profiles
+        scrollbar_mode: "OFF"
+        widgets:
+          - label:
+              text: "${str_head_profiles}"
+              x: 0
+              y: 0
+              width: 100%
+              align: TOP_LEFT
+              long_mode: SCROLL_CIRCULAR
+              text_font: roboto_l
+
+          - container:
+              id: lvgl_cont_profiles_prof1
+              width: 100%
+              height: 19
+              radius: 0
+              pad_all: 1
+              border_width: !lambda |-
+                if (std::string(id(select_act_profile).current_option()) == "Profile 1") {
+                  return 1;
+                } else {
+                  return 0;
+                }
+              border_color: white
+              bg_opa: COVER
+              bg_color: black
+              text_color: white
+              y: 38
+              layout:
+                type: flex
+                flex_flow: ROW
+                flex_align_main: SPACE_BETWEEN
+                flex_align_cross: CENTER
+              widgets:
+                - label:
+                    id: lvgl_lbl_prof1_name
+                    text: !lambda |-
+                      return id(profile_1_name);
+                    width: 33%
+                    text_align: LEFT
+                    long_mode: SCROLL_CIRCULAR
+                - label:
+                    id: lvgl_lbl_prof1_temp
+                    text: !lambda |-
+                      return str_sprintf("%d °C", id(profile_1_temp));
+                    text_align: RIGHT
+                - label:
+                    id: lvgl_lbl_prof1_hum
+                    text: !lambda |-
+                      return str_sprintf("%d %%", id(profile_1_hum));
+                    text_align: RIGHT
+
+          - container:
+              id: lvgl_cont_profiles_prof2
+              width: 100%
+              height: 19
+              radius: 0
+              pad_all: 1
+              border_width: !lambda |-
+                if (std::string(id(select_act_profile).current_option()) == "Profile 2") {
+                  return 1;
+                } else {
+                  return 0;
+                }
+              border_color: white
+              bg_opa: COVER
+              bg_color: black
+              text_color: white
+              y: 58
+              layout:
+                type: flex
+                flex_flow: ROW
+                flex_align_main: SPACE_BETWEEN
+                flex_align_cross: CENTER
+              widgets:
+                - label:
+                    id: lvgl_lbl_prof2_name
+                    text: !lambda |-
+                      return id(profile_2_name);
+                    width: 33%
+                    text_align: LEFT
+                    long_mode: SCROLL_CIRCULAR
+                - label:
+                    id: lvgl_lbl_prof2_temp
+                    text: !lambda |-
+                      return str_sprintf("%d °C", id(profile_2_temp));
+                    text_align: RIGHT
+                - label:
+                    id: lvgl_lbl_prof2_hum
+                    text: !lambda |-
+                      return str_sprintf("%d %%", id(profile_2_hum));
+                    text_align: RIGHT
+
+          - container:
+              id: lvgl_cont_profiles_prof3
+              width: 100%
+              height: 19
+              radius: 0
+              pad_all: 1
+              border_width: !lambda |-
+                if (std::string(id(select_act_profile).current_option()) == "Profile 3") {
+                  return 1;
+                } else {
+                  return 0;
+                }
+              border_color: white
+              bg_opa: COVER
+              bg_color: black
+              text_color: white
+              y: 78
+              layout:
+                type: flex
+                flex_flow: ROW
+                flex_align_main: SPACE_BETWEEN
+                flex_align_cross: CENTER
+              widgets:
+                - label:
+                    id: lvgl_lbl_prof3_name
+                    text: !lambda |-
+                      return id(profile_3_name);
+                    width: 33%
+                    text_align: LEFT
+                    long_mode: SCROLL_CIRCULAR
+                - label:
+                    id: lvgl_lbl_prof3_temp
+                    text: !lambda |-
+                      return str_sprintf("%d °C", id(profile_3_temp));
+                    text_align: RIGHT
+                - label:
+                    id: lvgl_lbl_prof3_hum
+                    text: !lambda |-
+                      return str_sprintf("%d %%", id(profile_3_hum));
+                    text_align: RIGHT
+
+      # Live values of heater / fan control (updated by update_status_page)
+      - id: lvgl_page_status
+        scrollbar_mode: "OFF"
+        widgets:
+          - label:
+              text: "${str_head_status}"
+              x: 0
+              y: 0
+              width: 100%
+              align: TOP_LEFT
+              long_mode: SCROLL_CIRCULAR
+              text_font: roboto_l
+
+          # Heater: actual output power
+          - container:
+              width: 100%
+              height: 18
+              y: 34
+              pad_all: 0
+              layout:
+                type: flex
+                flex_flow: ROW
+                flex_align_main: SPACE_BETWEEN
+                flex_align_cross: CENTER
+              widgets:
+                - label:
+                    text: "Heater:"
+                - label:
+                    id: lvgl_lbl_stat_heat
+                    text: "-- %"
+
+          # Limit: max. power allowed by NTC limiter
+          - container:
+              width: 100%
+              height: 18
+              y: 52
+              pad_all: 0
+              layout:
+                type: flex
+                flex_flow: ROW
+                flex_align_main: SPACE_BETWEEN
+                flex_align_cross: CENTER
+              widgets:
+                - label:
+                    text: "Limit:"
+                - label:
+                    id: lvgl_lbl_stat_limit
+                    text: "-- %"
+
+          # NTC: heater temperature + trend
+          - container:
+              width: 100%
+              height: 18
+              y: 70
+              pad_all: 0
+              layout:
+                type: flex
+                flex_flow: ROW
+                flex_align_main: SPACE_BETWEEN
+                flex_align_cross: CENTER
+              widgets:
+                - label:
+                    text: "NTC:"
+                - label:
+                    id: lvgl_lbl_stat_ntc
+                    text: "--.- °C"
+
+          # Fan: actual output speed
+          - container:
+              width: 100%
+              height: 18
+              y: 88
+              pad_all: 0
+              layout:
+                type: flex
+                flex_flow: ROW
+                flex_align_main: SPACE_BETWEEN
+                flex_align_cross: CENTER
+              widgets:
+                - label:
+                    text: "Fan:"
+                - label:
+                    id: lvgl_lbl_stat_fan
+                    text: "-- %"
+
+    top_layer:
+      widgets:
+        - obj:
+            id: ota_box
+            hidden: true
+            # Full screen, opaque black: hides page + status row during update
+            x: 0
+            y: 0
+            width: 128
+            height: 128
+            radius: 0
+            pad_all: 0
+            border_width: 0
+            text_color: white
+            bg_color: black
+            bg_opa: COVER
+            scrollbar_mode: "OFF"
+            scrollable: false
+            widgets:
+              - label:
+                  id: ota_label
+                  align: center
+                  y: -14
+                  width: 120
+                  text_align: CENTER
+                  long_mode: DOT
+                  text: "Updating..."
+              - bar:
+                  id: ota_bar
+                  align: center
+                  y: 10
+                  width: 110
+                  height: 14
+                  min_value: 0
+                  max_value: 100
+                  value: 0
+                  radius: 0
+                  pad_all: 2
+                  bg_color: black
+                  bg_opa: COVER
+                  border_width: 1
+                  border_color: white
+                  border_opa: COVER
+                  indicator:
+                    radius: 0
+                    bg_color: white
+                    bg_opa: COVER
+
+        - container:
+            id: status_row
+            hidden: false
+            align: bottom_mid
+            width: 100%
+            height: 20
+            outline_width: 1
+            outline_color: white
+            outline_opa: COVER
+            y: 0
+            scrollbar_mode: "OFF"
+            scrollable: false
+            border_width: 0
+            pad_all: 0
+            layout:
+              type: flex
+              flex_flow: row
+              flex_align_main: space_evenly
+              flex_align_track: center
+              flex_align_cross: center
+            text_color: white
+            bg_color: black
+            widgets:
+              # Fan animation
+              - animimg:
+                  id: lvgl_img_topl_fan
+                  hidden: true
+                  src: [fan_run1, fan_run2]
+                  image_recolor: white
+                  image_recolor_opa: COVER
+                  duration: 800ms
+
+              # Still Fan when off
+              - image:
+                  id: lvgl_img_topl_fan_still
+                  src: fan_still
+                  image_recolor: white
+                  image_recolor_opa: COVER
+
+              # Heater animation
+              - animimg:
+                  id: lvgl_img_topl_heat
+                  hidden: true
+                  src: [heater_1, heater_2]
+                  image_recolor: white
+                  image_recolor_opa: COVER
+                  duration: 800ms
+
+              # Still Heater Image when off
+              - image:
+                  id: lvgl_img_topl_heat_still
+                  src: heater_1
+                  image_recolor: white
+                  image_recolor_opa: COVER
+
+              # Connection: wifi_on = WiFi + HA (API) connected, wifi_off otherwise
+              - image:
+                  id: lvgl_img_topl_conn_on
+                  hidden: true
+                  src: wifi_on_img
+                  image_recolor: white
+                  image_recolor_opa: COVER
+
+              - image:
+                  id: lvgl_img_topl_conn_off
+                  src: wifi_off_img
+                  image_recolor: white
+                  image_recolor_opa: COVER
+
+        - obj:
+            id: error_box
+            hidden: true
+            align: center
+            width: 124
+            height: 100
+            text_color: white
+            bg_color: black
+            border_color: white
+            border_width: 1
+            scrollbar_mode: "OFF"
+            widgets:
+              - label:
+                  text: "ERROR"
+                  align: TOP_MID
+              - label:
+                  id: lvgl_lbl_error_text
+                  text: ""
+                  align: CENTER
+                  width: 110
+                  long_mode: WRAP
+                  text_align: CENTER
+              - label:
+                  text: "${str_error_reset_hint}"
+                  align: BOTTOM_MID
+
+        # Boot screen: full-screen logo, last in top_layer = covers everything.
+        # Hidden by on_boot after BOOT_SCREEN_SECONDS.
+        - obj:
+            id: boot_box
+            hidden: false
+            x: 0
+            y: 0
+            width: 128
+            height: 128
+            radius: 0
+            pad_all: 0
+            border_width: 0
+            bg_color: black
+            bg_opa: COVER
+            scrollbar_mode: "OFF"
+            widgets:
+              - image:
+                  src: voxel_img
+                  align: CENTER
+                  image_recolor: white
+                  image_recolor_opa: COVER
+#########################################################################
+#########################################################################
+
+
+############### Sensors #################################################
+#########################################################################
+sensor:
+  - platform: sht4x
+    update_interval: 5s
+    temperature:
+      name: "Temperature"
+      id: sht4x_chamber_temp
+      accuracy_decimals: 1
+      on_value:
+        then:
+          - lambda: 'if (std::isfinite(x)) id(sht_last_update) = millis();'
+          # Door detection: fast temperature drop = open, drop stopped/rising = closed
+          - lambda: |-
+              if (!std::isfinite(x)) return;
+              const uint32_t now = millis();
+
+              // ring buffer of the last 16 values (SHT every 5s -> 80s history)
+              static float    buf_t[16];
+              static uint32_t buf_ms[16];
+              static uint8_t  idx = 0, cnt = 0;
+              if (id(door_hist_clear)) { cnt = 0; id(door_hist_clear) = false; }
+              buf_t[idx] = x; buf_ms[idx] = now;
+              idx = (idx + 1) % 16;
+              if (cnt < 16) cnt++;
+
+              static float    door_min = 0.0f;
+              static uint32_t door_min_ms = 0;
+              const bool prev = id(door_open);
+
+              if (!id(door_open)) {
+                // only relevant while the system wants to heat
+                if (!id(heat_wanted)) return;
+                // peak within window vs. now
+                float peak = x;
+                for (uint8_t i = 0; i < cnt; i++) {
+                  if (now - buf_ms[i] <= ${DOOR_DROP_WINDOW_S} * 1000UL && buf_t[i] > peak) peak = buf_t[i];
+                }
+                if (peak - x >= ${DOOR_DROP_K}) {
+                  id(door_open) = true;
+                  door_min = x;
+                  door_min_ms = now;
+                }
+              } else {
+                // new minimum only if clearly lower (ignore sensor noise)
+                if (x < door_min - 0.1f) { door_min = x; door_min_ms = now; }
+                if (x >= door_min + ${DOOR_CLOSE_RISE_K}
+                    || now - door_min_ms >= ${DOOR_CLOSE_STABLE_S} * 1000UL) {
+                  id(door_open) = false;
+                  cnt = 0;   // clear history -> no re-trigger from old peak
+                }
+              }
+
+              if (prev != id(door_open)) {
+                ESP_LOGW("door", "Door %s (T=%.1f)", id(door_open) ? "OPEN" : "closed", x);
+                id(door_changed).execute();
+              }
+          - lvgl.label.update:
+              id: lvgl_lbl_main_temp
+              text:
+                format: "Temp.: %.1f°C"
+                args: [ 'x' ]
+
+    humidity:
+      name: "Relative Humidity"
+      id: sht4x_chamber_hum
+      accuracy_decimals: 1
+      on_value:
+        then:
+          # Humidity hold: hysteresis, re-evaluate climate mode only on change
+          - lambda: |-
+              if (!std::isfinite(x)) return;
+              const bool prev = id(hum_heat_active);
+              if (x > id(SET_HUM) + ${HUM_HYSTERESIS}) {
+                id(hum_heat_active) = true;
+              } else if (x < id(SET_HUM)) {
+                id(hum_heat_active) = false;
+              }
+              if (prev != id(hum_heat_active)) id(set_climate_mode).execute();
+          - lvgl.label.update:
+              id: lvgl_lbl_main_hum
+              text:
+                format: "Hum.: %.1f%%"
+                args: [ 'x' ]
+
+
+  - platform: adc
+    id: adc_ntc_in
+    pin: ${PIN_NTC}
+    attenuation: 12db     # full range up to ~3.1V (without: clipping at ~1V)
+    update_interval: 500ms
+    filters:
+      # Drop single outliers (ADC2/WiFi): median of 5 samples,
+      # output every 4 samples = every 2s
+      - median:
+          window_size: 5
+          send_every: 4
+          send_first_at: 3
+
+  - platform: resistance
+    sensor: adc_ntc_in
+    configuration: UPSTREAM
+    resistor: 10.0kOhm
+    reference_voltage: ${NTC_ref_voltage}
+    id: ntc_res_sensor
+
+  - platform: ntc
+    sensor: ntc_res_sensor
+    calibration:
+      b_constant: 3950
+      reference_temperature: 25°C
+      reference_resistance: 100kOhm
+    name: "Heater Temperature"
+    id: ntc_heater_temp
+    on_value:
+      then:
+        - lambda: |-
+            static float last_t = NAN;
+            static uint32_t last_ms = 0;
+            const uint32_t now = millis();
+            if (std::isfinite(x)) {
+              // Calculate and smooth (EMA) the slope for the limiter prediction
+              if (std::isfinite(last_t) && last_ms != 0) {
+                const float dt = (now - last_ms) / 1000.0f;
+                if (dt > 0.1f) {
+                  const float s = (x - last_t) / dt;
+                  id(ntc_slope) = 0.7f * id(ntc_slope) + 0.3f * s;
+                }
+              }
+              last_t = x;
+              last_ms = now;
+              id(ntc_last_update) = now;
+            }
+
+  - platform: wifi_signal
+    name: "Wifi Signal"
+    update_interval: 60s
+    icon: mdi:wifi
+
+  - platform: uptime
+    name: "Uptime"
+    update_interval: 60s
+    icon: mdi:clock-outline
+
+  # Diagnostics for tuning the heater limiter
+  - platform: template
+    name: "Heater Power"
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    icon: mdi:radiator
+    entity_category: diagnostic
+    update_interval: 5s
+    lambda: 'return id(heater_level) * 100.0f;'
+
+  - platform: template
+    name: "Heater Limit"
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    icon: mdi:speedometer-slow
+    entity_category: diagnostic
+    update_interval: 5s
+    lambda: 'return id(heater_limit) * 100.0f;'
+
+  - platform: template
+    name: "NTC Slope"
+    unit_of_measurement: "K/min"
+    accuracy_decimals: 1
+    icon: mdi:chart-line
+    entity_category: diagnostic
+    update_interval: 5s
+    lambda: 'return id(ntc_slope) * 60.0f;'
+
+  - platform: template
+    name: "Fan Power"
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    icon: mdi:fan
+    entity_category: diagnostic
+    update_interval: 5s
+    lambda: 'return id(fan_level) * 100.0f;'
+
+  - platform: template
+    name: "Dry Remaining"
+    id: sens_dry_remaining
+    unit_of_measurement: "min"
+    accuracy_decimals: 0
+    icon: mdi:timer-sand-complete
+    update_interval: 60s
+    lambda: |-
+      if (std::string(id(select_mode).current_option()) != "${str_mode_3}") return 0;
+      return std::max(0, id(DRY_HOURS) * 60 - id(dry_elapsed_min));
+
+
+############### BINARY SENSORS ##########################################
+#########################################################################
+binary_sensor:
+  - platform: template
+    name: "Door"
+    id: bs_door
+    device_class: door
+    lambda: 'return id(door_open);'
+
+  - platform: gpio
+    pin: ${PIN_PRINTER_STATUS}
+    id: input_printer_state
+    name: "Input Printer State"
+    device_class: running
+    on_press:
+      then:
+        - lambda: |-
+            id(was_printing) = true;
+            id(print_finished) = false;
+        - script.execute: screensaver
+        - script.execute: update_printer_label
+        - script.execute: set_climate_mode
+        - script.execute: update_status_led
+
+    on_release:
+      then:
+        - lambda: |-
+            // only a real print end (not the initial state at boot)
+            if (id(was_printing)) id(print_finished) = true;
+            id(was_printing) = false;
+        - script.execute: screensaver
+        - script.execute: update_printer_label
+        - script.execute: set_climate_mode
+        - script.execute: update_status_led
+
+  - platform: gpio
+    pin:
+      number: ${PIN_BUTTON_PLUS}
+      mode:
+        input: true
+        pulldown: true
+    id: input_bu_plus
+    filters:
+      - delayed_on_off: 20ms
+    on_press:
+      then:
+        - script.execute: led_acknowledge
+        - if:
+            condition:
+              - lambda: 'return id(oled_1).is_on();'
+              - lambda: 'return id(error_code) == 0;'
+            then:
+              - script.execute: screensaver
+              - if:
+                  condition:
+                    - lvgl.page.is_showing: lvgl_page_set
+                    - lambda: 'return id(edit_mode);'
+                  then:
+                    - script.execute: value_plus
+                  else:
+                    - if:
+                        condition:
+                          - lvgl.page.is_showing: lvgl_page_profiles
+                          - lambda: 'return id(edit_mode);'
+                        then:
+                          - script.execute: profile_up
+                          - script.execute: update_profile_page
+                        else:
+                          - lvgl.page.previous:
+
+            else:
+              - script.execute: screensaver
+
+  - platform: gpio
+    pin:
+      number: ${PIN_BUTTON_MINUS}
+      mode:
+        input: true
+        pulldown: true
+    id: input_bu_minus
+    filters:
+      - delayed_on_off: 20ms
+    on_press:
+      then:
+        - script.execute: led_acknowledge
+        - if:
+            condition:
+              - lambda: 'return id(oled_1).is_on();'
+              - lambda: 'return id(error_code) == 0;'
+            then:
+              - script.execute: screensaver
+              - if:
+                  condition:
+                    - lvgl.page.is_showing: lvgl_page_set
+                    - lambda: 'return id(edit_mode);'
+                  then:
+                    - script.execute: value_minus
+                  else:
+                    - if:
+                        condition:
+                          - lvgl.page.is_showing: lvgl_page_profiles
+                          - lambda: 'return id(edit_mode);'
+                        then:
+                          - script.execute: profile_down
+                          - script.execute: update_profile_page
+                        else:
+                          - lvgl.page.next:
+
+            else:
+              - script.execute: screensaver
+
+  - platform: gpio
+    pin:
+      number: ${PIN_BUTTON_ACTION}
+      mode:
+        input: true
+        pulldown: true
+    id: input_bu_action
+    filters:
+      - delayed_on_off: 20ms
+    on_press:
+      then:
+        - script.execute: led_acknowledge
+    on_multi_click:
+      - timing:
+          - ON for at least 1s
+        then:
+          - if:
+              condition:
+                lambda: 'return id(oled_1).is_on();'
+              then:
+                - script.execute: screensaver
+                - if:
+                    condition:
+                      lambda: 'return id(error_code) >= 2 || id(door_open);'
+                    then:
+                      # Long press = acknowledge: fault first, then door warning
+                      - if:
+                          condition:
+                            lambda: 'return id(error_code) >= 2;'
+                          then:
+                            - script.execute: reset_error
+                          else:
+                            - script.execute: door_reset
+                    else:
+                      - if:
+                          condition:
+                            lvgl.page.is_showing: lvgl_page_set
+                          then:
+                              - lambda: 'id(edit_mode) = !id(edit_mode);'
+                              - if:
+                                  condition:
+                                    lambda: 'return !id(edit_mode);'
+                                  then:
+                                    lambda: 'id(selected_value) = 0;' # Prepare for next usage
+                              - script.execute: update_settings_page
+
+                      - if:
+                          condition:
+                            lvgl.page.is_showing: lvgl_page_profiles
+                          then:
+                            - lambda: 'id(edit_mode) = !id(edit_mode);'
+                            - lambda: |-
+                                if (id(edit_mode)) {
+                                  const std::string option = std::string(id(select_act_profile).current_option());
+                                  if (option == "Profile 1") {
+                                      id(selected_value) = 0;
+                                  } else if (option == "Profile 2") {
+                                      id(selected_value) = 1;
+                                  } else if (option == "Profile 3") {
+                                      id(selected_value) = 2;
+                                  } else {
+                                      id(selected_value) = 0;
+                                  }
+                                }
+                            - script.execute: update_profile_page
+
+              else:
+                - script.execute: screensaver
+
+      - timing:
+          - ON for at most 500ms
+          - OFF for at least 50ms
+        then:
+          - if:
+              condition:
+                - lambda: 'return id(oled_1).is_on();'
+                - lambda: 'return id(error_code) == 0;'
+              then:
+                - script.execute: screensaver
+                - if:
+                    condition:
+                      lvgl.page.is_showing: lvgl_page_main
+                    then:
+                        - script.execute: change_mode
+                        - script.execute: update_labels_page_main
+
+                - if:
+                    condition:
+                      - lambda: 'return id(edit_mode);'
+                      - lvgl.page.is_showing: lvgl_page_set
+                    then:
+                      - lambda: |-
+                          // Temp -> Humidity -> Dry time -> Temp
+                          id(selected_value) = (id(selected_value) + 1) % 3;
+                      - script.execute: update_settings_page
+
+                - if:
+                    condition:
+                      - lambda: 'return id(edit_mode);'
+                      - lvgl.page.is_showing: lvgl_page_profiles
+                    then:
+                      - lambda: |-
+                          auto call = id(select_act_profile).make_call();
+                          switch (id(selected_value)) {
+                            case 0:
+                              call.set_option("Profile 1");
+                              break;
+                            case 1:
+                              call.set_option("Profile 2");
+                              break;
+                            case 2:
+                              call.set_option("Profile 3");
+                              break;
+                            default:
+                              call.set_option("None");
+                              break;
+                          }
+                          call.perform();
+                      - script.execute: update_profile_page
+
+              else:
+                - script.execute: screensaver
+
+
+############### BUTTON ##################################################
+#########################################################################
+button:
+  - platform: restart
+    name: "Reboot"
+
+  - platform: template
+    name: "Reset Error"
+    icon: mdi:alert-remove-outline
+    on_press:
+      - script.execute: reset_error
+
+  - platform: template
+    name: "Door Reset"
+    icon: mdi:door-closed-lock
+    on_press:
+      - script.execute: door_reset
+
+
+############### SELECT ##################################################
+#########################################################################
+select:
+  - platform: template
+    name: "System Mode"
+    id: select_mode
+    optimistic: true
+    restore_value: true
+    options:
+      - '${str_mode_1}'
+      - '${str_mode_2}'
+      - '${str_mode_3}'
+    set_action:
+      - script.execute: screensaver
+      - lambda: |-
+          // Entering Dry -> restart dry timer
+          if (x == "${str_mode_3}" && std::string(id(select_mode).current_option()) != "${str_mode_3}") {
+            id(dry_elapsed_min) = 0;
+          }
+          id(select_mode).publish_state(x);
+      - script.execute: update_labels_page_main
+      - script.execute: set_climate_mode
+
+  # Mode after Dry time has elapsed
+  - platform: template
+    name: "Dry End Mode"
+    id: select_dry_end_mode
+    icon: mdi:timer-check-outline
+    optimistic: true
+    restore_value: true
+    initial_option: '${str_mode_2}'
+    options:
+      - '${str_mode_2}'
+      - '${str_mode_1}'
+
+  - platform: template
+    name: "Active Profile"
+    id: select_act_profile
+    restore_value: true
+    options:
+      - 'Profile 1'
+      - 'Profile 2'
+      - 'Profile 3'
+      - 'None'
+    set_action:
+      - lambda: |-
+          id(select_act_profile).publish_state(x);
+
+          if (x == "Profile 1") {
+                id(SET_TEMP) = id(profile_1_temp);
+                id(SET_HUM) = id(profile_1_hum);
+              }
+          if (x == "Profile 2") {
+                id(SET_TEMP) = id(profile_2_temp);
+                id(SET_HUM) = id(profile_2_hum);
+              }
+          if (x == "Profile 3") {
+                id(SET_TEMP) = id(profile_3_temp);
+                id(SET_HUM) = id(profile_3_hum);
+              }
+      # Same path as everywhere else: target temp + heating mode
+      - script.execute: set_climate_mode
+      - script.execute: update_profile_page
+      - script.execute: update_settings_page # Update values on setpoints page
+
+
+############### SWITCH ##################################################
+#########################################################################
+switch:
+  # Auto mode: ON = coupled to printer (print -> SET_TEMP, idle -> hold SET_HUM)
+  #            OFF = hold SET_HUM only (printer state ignored)
+  - platform: template
+    id: sw_ext_control
+    name: "Printer Coupling"
+    icon: mdi:printer-3d
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      then:
+        - script.execute: screensaver
+        - script.execute: set_climate_mode
+
+    on_turn_off:
+      then:
+        - script.execute: screensaver
+        - script.execute: set_climate_mode
+
+
+############### OUTPUT ##################################################
+#########################################################################
+output:
+  - platform: ledc
+    pin: ${PIN_FAN}
+    id: output_fan_pwm
+    frequency: 25kHz
+    min_power: 20%
+    zero_means_zero: true   # 0 = really off (otherwise min_power)
+
+  - platform: ledc
+    pin: ${PIN_HEATER}
+    id: output_heater_pwm
+    # MOSFET: 250 Hz. < 100 Hz uses a slow LEDC clock path that fails on the
+    # ESP32-S3 ("Not yet initialized" -> heater never switched on).
+    frequency: 250Hz
+
+  # Safety gate: PID writes here, heater only gets power if no error is active
+  - platform: template
+    id: output_heater_gate
+    type: float
+    write_action:
+      - lambda: |-
+          // PID request is stored; output = min(request, NTC limit), 0 on error.
+          // The safety loop re-applies this every second (limit changes faster than PID).
+          id(heater_request) = std::isfinite(state) ? state : 0.0f;
+          if (id(error_code) != 0) {
+            id(heater_level) = 0.0f;
+          } else {
+            id(heater_level) = std::min(id(heater_request), id(heater_limit));
+          }
+          id(output_heater_pwm).set_level(id(heater_level));
+
+
+############### LIGHT ###################################################
+#########################################################################
+light:
+  - platform: esp32_rmt_led_strip
+    #name: "Main Light"
+    id: main_led_bus
+    channel_colors: RGB
+    pin: ${PIN_NEOPIXEL}
+    num_leds: ${NUM_LEDS_SEG1 + NUM_LEDS_SEG2}
+    chipset: WS2811
+    internal: true
+
+  # Segment 1: status light (controlled by update_status_led)
+  - platform: partition
+    name: "Light"
+    id: led_status
+    segments:
+      id: main_led_bus
+      from: 0
+      to: ${NUM_LEDS_SEG1 - 1}
+    default_transition_length: 300ms
+    effects:
+      - strobe:
+          name: "Error Blink"
+          colors:
+            - state: true
+              brightness: 100%
+              red: 100%
+              green: 0%
+              blue: 0%
+              duration: 500ms
+            - state: false
+              duration: 500ms
+      - strobe:
+          name: "Door Blink"
+          colors:
+            - state: true
+              brightness: 100%
+              red: 100%
+              green: 60%
+              blue: 0%
+              duration: 800ms
+            - state: false
+              duration: 800ms
+
+  - platform: partition
+    name: "Extended Light"
+    segments:
+      id: main_led_bus
+      from: ${NUM_LEDS_SEG1}
+      to: ${NUM_LEDS_SEG1 + NUM_LEDS_SEG2 - 1}
+
+
+############### TEXT SENSOR #############################################
+#########################################################################
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+    ssid:
+      name: "Wi-Fi SSID"
+    bssid:
+      name: "Wi-Fi BSSID"
+
+  - platform: version
+    name: "ESPHome Version"
+    hide_timestamp: true
+
+  - platform: template
+    name: "System Error"
+    id: txt_system_error
+    icon: mdi:alert-circle-outline
+
+
+############### TEXT (INPUT) ############################################
+#########################################################################
+text:
+  - platform: template
+    name: "Profile 1 Name"
+    id: txt_prof1_name
+    mode: TEXT
+    max_length: 10
+    set_action:
+      then:
+        - lambda: |-
+            id(profile_1_name) = x.c_str();
+            id(txt_prof1_name).publish_state(x);
+        - lvgl.label.update:
+            id: lvgl_lbl_prof1_name
+            text: !lambda |-
+              return id(profile_1_name).c_str();
+    lambda: 'return id(profile_1_name);'
+
+  - platform: template
+    name: "Profile 2 Name"
+    id: txt_prof2_name
+    mode: TEXT
+    max_length: 10
+    set_action:
+      then:
+        - lambda: |-
+            id(profile_2_name) = x.c_str();
+            id(txt_prof2_name).publish_state(x);
+        - lvgl.label.update:
+            id: lvgl_lbl_prof2_name
+            text: !lambda |-
+              return id(profile_2_name).c_str();
+    lambda: 'return id(profile_2_name);'
+
+  - platform: template
+    name: "Profile 3 Name"
+    id: txt_prof3_name
+    mode: TEXT
+    max_length: 10
+    set_action:
+      then:
+        - lambda: |-
+            id(profile_3_name) = x.c_str();
+            id(txt_prof3_name).publish_state(x);
+        - lvgl.label.update:
+            id: lvgl_lbl_prof3_name
+            text: !lambda |-
+              return id(profile_3_name).c_str();
+    lambda: 'return id(profile_3_name);'
+
+
+############### NUMBER ##################################################
+#########################################################################
+number:
+  - platform: template
+    name: "LED Standby Timeout"
+    id: num_led_timeout
+    icon: mdi:timer-outline
+    unit_of_measurement: "min"
+    mode: box
+    step: 1
+    min_value: ${MIN_LED_TIMEOUT}
+    max_value: ${MAX_LED_TIMEOUT}
+    lambda: 'return id(LED_TIMEOUT_MIN);'
+    set_action:
+      then:
+        - lambda: |-
+            id(LED_TIMEOUT_MIN) = (int) x;
+            id(num_led_timeout).publish_state(x);
+
+  - platform: template
+    name: "Dry Duration"
+    id: num_dry_hours
+    icon: mdi:timer-sand
+    unit_of_measurement: "h"
+    mode: box
+    step: 1
+    min_value: ${MIN_DRY_HOURS}
+    max_value: ${MAX_DRY_HOURS}
+    lambda: 'return id(DRY_HOURS);'
+    set_action:
+      then:
+        - lambda: |-
+            id(DRY_HOURS) = (int) x;
+            id(num_dry_hours).publish_state(x);
+        - script.execute: update_settings_page
+        - script.execute: update_labels_page_main
+
+  - platform: template
+    name: "Profile 1 Temperature"
+    id: num_prof1_temp
+    step: 1
+    min_value: ${MIN_TEMP}
+    max_value: ${MAX_TEMP}
+    set_action:
+      then:
+        - lambda: |-
+            id(profile_1_temp) = x;
+            id(num_prof1_temp).publish_state(x);
+        - lvgl.label.update:
+            id: lvgl_lbl_prof1_temp
+            text: !lambda |-
+              return str_sprintf("%.0f °C", x);
+        - script.execute: apply_active_profile
+    lambda: 'return id(profile_1_temp);'
+
+  - platform: template
+    name: "Profile 2 Temperature"
+    id: num_prof2_temp
+    step: 1
+    min_value: ${MIN_TEMP}
+    max_value: ${MAX_TEMP}
+    set_action:
+      then:
+        - lambda: |-
+            id(profile_2_temp) = x;
+            id(num_prof2_temp).publish_state(x);
+        - lvgl.label.update:
+            id: lvgl_lbl_prof2_temp
+            text: !lambda |-
+              return str_sprintf("%.0f °C", x);
+        - script.execute: apply_active_profile
+    lambda: 'return id(profile_2_temp);'
+
+  - platform: template
+    name: "Profile 3 Temperature"
+    id: num_prof3_temp
+    step: 1
+    min_value: ${MIN_TEMP}
+    max_value: ${MAX_TEMP}
+    set_action:
+      then:
+        - lambda: |-
+            id(profile_3_temp) = x;
+            id(num_prof3_temp).publish_state(x);
+        - lvgl.label.update:
+            id: lvgl_lbl_prof3_temp
+            text: !lambda |-
+              return str_sprintf("%.0f °C", x);
+        - script.execute: apply_active_profile
+    lambda: 'return id(profile_3_temp);'
+
+  - platform: template
+    name: "Profile 1 Humidity"
+    id: num_prof1_hum
+    step: 1
+    min_value: ${MIN_HUM}
+    max_value: ${MAX_HUM}
+    set_action:
+      then:
+        - lambda: |-
+            id(profile_1_hum) = x;
+            id(num_prof1_hum).publish_state(x);
+        - lvgl.label.update:
+            id: lvgl_lbl_prof1_hum
+            text: !lambda |-
+              return str_sprintf("%.0f %%", x);
+        - script.execute: apply_active_profile
+    lambda: 'return id(profile_1_hum);'
+
+  - platform: template
+    name: "Profile 2 Humidity"
+    id: num_prof2_hum
+    step: 1
+    min_value: ${MIN_HUM}
+    max_value: ${MAX_HUM}
+    set_action:
+      then:
+        - lambda: |-
+            id(profile_2_hum) = x;
+            id(num_prof2_hum).publish_state(x);
+        - lvgl.label.update:
+            id: lvgl_lbl_prof2_hum
+            text: !lambda |-
+              return str_sprintf("%.0f %%", x);
+        - script.execute: apply_active_profile
+    lambda: 'return id(profile_2_hum);'
+
+  - platform: template
+    name: "Profile 3 Humidity"
+    id: num_prof3_hum
+    step: 1
+    min_value: ${MIN_HUM}
+    max_value: ${MAX_HUM}
+    set_action:
+      then:
+        - lambda: |-
+            id(profile_3_hum) = x;
+            id(num_prof3_hum).publish_state(x);
+        - lvgl.label.update:
+            id: lvgl_lbl_prof3_hum
+            text: !lambda |-
+              return str_sprintf("%.0f %%", x);
+        - script.execute: apply_active_profile
+    lambda: 'return id(profile_3_hum);'
+
+
+climate:
+  - platform: pid
+    id: pid_chamber_climate
+    name: "Chamber Thermostat"
+    sensor: sht4x_chamber_temp
+    control_parameters:
+      kp: 1
+      ki: 0 # leave at 0 because of predictive Limiter!
+      kd: 0
+    default_target_temperature: 30
+    heat_output: output_heater_gate
+
+
+
+############################# SCRIPTS ###################################
+#########################################################################
+script:
+
+  # Turn Screen Off after x time (s)
+  #########################################################################
+  - id: screensaver
+    mode: restart
+    then:
+      - lambda: id(oled_1).turn_on();
+      - script.execute: led_standby_timer    # standby light on together with display
+      - delay: ${SCREEN_OFF_SECONDS}s
+      - lambda: |-
+          id(oled_1).turn_off();
+          id(edit_mode) = 0;
+          id(selected_value) = 0;
+      # Edit mode ended -> redraw all pages so no highlight remains anywhere
+      - script.execute: update_labels_page_main
+      - script.execute: update_settings_page
+      - script.execute: update_profile_page
+
+    # Updating Set-Point Page
+    #########################################################################
+  - id: update_settings_page
+    then:
+      # Highlight only while THIS page is being edited
+      # (edit_mode/selected_value are shared with the profile page)
+      - if:
+          condition:
+            lvgl.page.is_showing: lvgl_page_set
+          then:
+            - lambda: 'id(set_page_edit) = id(edit_mode);'
+          else:
+            - lambda: 'id(set_page_edit) = false;'
+      # Temperature
+      - lvgl.label.update:
+          id: temp_value
+          text: !lambda |-
+            static char buffer[32];
+            snprintf(buffer, sizeof(buffer), "%d °C", id(SET_TEMP));
+            return buffer;
+          text_color: !lambda |-
+            if ( id(set_page_edit) && id(selected_value)==0 ) {
+              return lv_color_black();
+            } else {
+              return lv_color_white();
+            }
+          bg_color: !lambda |-
+            if ( id(set_page_edit) && id(selected_value)==0 ) {
+              return lv_color_white();
+            } else {
+              return lv_color_black();
+            }
+
+      # Humidity
+      - lvgl.label.update:
+          id: humidity_value
+          text: !lambda |-
+            static char buffer[32];
+            snprintf(buffer, sizeof(buffer), "%d %%", id(SET_HUM));
+            return buffer;
+          text_color: !lambda |-
+            if ( id(set_page_edit) && id(selected_value)==1 ) {
+              return lv_color_black();
+            } else {
+              return lv_color_white();
+            }
+          bg_color: !lambda |-
+            if ( id(set_page_edit) && id(selected_value)==1 ) {
+              return lv_color_white();
+            } else {
+              return lv_color_black();
+            }
+
+      # Dry duration
+      - lvgl.label.update:
+          id: dry_value
+          text: !lambda |-
+            static char buffer[16];
+            snprintf(buffer, sizeof(buffer), "%d h", id(DRY_HOURS));
+            return buffer;
+          text_color: !lambda |-
+            if ( id(set_page_edit) && id(selected_value)==2 ) {
+              return lv_color_black();
+            } else {
+              return lv_color_white();
+            }
+          bg_color: !lambda |-
+            if ( id(set_page_edit) && id(selected_value)==2 ) {
+              return lv_color_white();
+            } else {
+              return lv_color_black();
+            }
+
+    # Update Profile Page
+    #########################################################################
+  - id: update_profile_page # selected_value holds the active profile initially (default 0); UP/DOWN changes selected_value - ACTION activates it -> select_act_profile
+    then:
+      # Profile 1
+      - lvgl.container.update:
+          id: lvgl_cont_profiles_prof1
+          text_color: !lambda |-
+            if (id(edit_mode) && id(selected_value) == 0) {
+              return lv_color_black();
+            } else {
+              return lv_color_white();
+            }
+
+          bg_color: !lambda |-
+            if (id(edit_mode) && id(selected_value) == 0) {
+              return lv_color_white();
+            } else {
+              return lv_color_black();
+            }
+
+      # Profile 2
+      - lvgl.container.update:
+          id: lvgl_cont_profiles_prof2
+          text_color: !lambda |-
+            if (id(edit_mode) && id(selected_value) == 1) {
+              return lv_color_black();
+            } else {
+              return lv_color_white();
+            }
+
+          bg_color: !lambda |-
+            if (id(edit_mode) && id(selected_value) == 1) {
+              return lv_color_white();
+            } else {
+              return lv_color_black();
+            }
+
+      # Profile 3
+      - lvgl.container.update:
+          id: lvgl_cont_profiles_prof3
+          text_color: !lambda |-
+            if (id(edit_mode) && id(selected_value) == 2) {
+              return lv_color_black();
+            } else {
+              return lv_color_white();
+            }
+
+          bg_color: !lambda |-
+            if (id(edit_mode) && id(selected_value) == 2) {
+              return lv_color_white();
+            } else {
+              return lv_color_black();
+            }
+
+      - lvgl.container.update:
+          id: lvgl_cont_profiles_prof1
+          border_width: !lambda |-
+            if (std::string(id(select_act_profile).current_option()) == "Profile 1") {
+              return 1;
+            } else {
+              return 0;
+            }
+      - lvgl.container.update:
+          id: lvgl_cont_profiles_prof2
+          border_width: !lambda |-
+            if (std::string(id(select_act_profile).current_option()) == "Profile 2") {
+              return 1;
+            } else {
+              return 0;
+            }
+      - lvgl.container.update:
+          id: lvgl_cont_profiles_prof3
+          border_width: !lambda |-
+            if (std::string(id(select_act_profile).current_option()) == "Profile 3") {
+              return 1;
+            } else {
+              return 0;
+            }
+
+  #########################################################################
+  - id: update_labels_page_profile # Workaround for updating labels after start
+    then:
+      - lvgl.label.update:
+          id: lvgl_lbl_prof1_name
+          text: !lambda |-
+            return id(profile_1_name);
+      - lvgl.label.update:
+          id: lvgl_lbl_prof2_name
+          text: !lambda |-
+            return id(profile_2_name);
+      - lvgl.label.update:
+          id: lvgl_lbl_prof3_name
+          text: !lambda |-
+            return id(profile_3_name);
+      - lvgl.label.update:
+            id: lvgl_lbl_prof1_temp
+            text: !lambda |-
+              return str_sprintf("%d °C", id(profile_1_temp));
+      - lvgl.label.update:
+            id: lvgl_lbl_prof1_hum
+            text: !lambda |-
+              return str_sprintf("%d %%", id(profile_1_hum));
+      - lvgl.label.update:
+            id: lvgl_lbl_prof2_temp
+            text: !lambda |-
+              return str_sprintf("%d °C", id(profile_2_temp));
+      - lvgl.label.update:
+            id: lvgl_lbl_prof2_hum
+            text: !lambda |-
+              return str_sprintf("%d %%", id(profile_2_hum));
+      - lvgl.label.update:
+            id: lvgl_lbl_prof3_temp
+            text: !lambda |-
+              return str_sprintf("%d °C", id(profile_3_temp));
+      - lvgl.label.update:
+            id: lvgl_lbl_prof3_hum
+            text: !lambda |-
+              return str_sprintf("%d %%", id(profile_3_hum));
+
+  # Inc Value
+  #########################################################################
+  - id: value_plus
+    then:
+      - lambda: |-
+          bool sp_changed = false;   // temp/hum setpoint really changed?
+          if (id(selected_value) == 0) {
+            if (id(SET_TEMP) < ${MAX_TEMP}) {
+              id(SET_TEMP) += 1;
+              sp_changed = true;
+              }
+          } else if (id(selected_value) == 1) {
+            if (id(SET_HUM) < ${MAX_HUM}) {
+              id(SET_HUM) += 1;
+              sp_changed = true;
+              }
+          } else {
+            if (id(DRY_HOURS) < ${MAX_DRY_HOURS}) {
+              id(DRY_HOURS) += 1;
+              id(num_dry_hours).publish_state(id(DRY_HOURS));
+            }
+          }
+          // Manual setpoint change -> values no longer match a profile
+          if (sp_changed && std::string(id(select_act_profile).current_option()) != "None") {
+            auto call = id(select_act_profile).make_call();
+            call.set_option("None");
+            call.perform();
+          }
+      - script.execute: update_settings_page
+      - script.execute: set_climate_mode   # pass new setpoint to PID
+
+  # Dec Value
+  #########################################################################
+  - id: value_minus
+    then:
+      - lambda: |-
+          bool sp_changed = false;   // temp/hum setpoint really changed?
+          if (id(selected_value) == 0) {
+            if (id(SET_TEMP) > ${MIN_TEMP}) {
+              id(SET_TEMP) -= 1;
+              sp_changed = true;
+            }
+          } else if (id(selected_value) == 1) {
+            if (id(SET_HUM) > ${MIN_HUM}) {
+              id(SET_HUM) -= 1;
+              sp_changed = true;
+            }
+          } else {
+            if (id(DRY_HOURS) > ${MIN_DRY_HOURS}) {
+              id(DRY_HOURS) -= 1;
+              id(num_dry_hours).publish_state(id(DRY_HOURS));
+            }
+          }
+          // Manual setpoint change -> values no longer match a profile
+          if (sp_changed && std::string(id(select_act_profile).current_option()) != "None") {
+            auto call = id(select_act_profile).make_call();
+            call.set_option("None");
+            call.perform();
+          }
+      - script.execute: update_settings_page
+      - script.execute: set_climate_mode   # pass new setpoint to PID
+
+  #########################################################################
+  - id: profile_up
+    then:
+      - lambda: |-
+          if (id(selected_value) == 0) {
+            // Profile 1 -> 3
+            id(selected_value) = 2;
+          } else if (id(selected_value) == 1) {
+            // Profile 2 -> 1
+            id(selected_value) = 0;
+          } else if (id(selected_value) == 2) {
+            // Profile 3 -> 2
+            id(selected_value) = 1;
+          } else {
+            // None, clear all
+            id(selected_value) = 0;
+          }
+
+  #########################################################################
+  - id: profile_down
+    then:
+      - lambda: |-
+          if (id(selected_value) == 0) {
+            // Profile 1 -> 2
+            id(selected_value) = 1;
+          } else if (id(selected_value) == 1) {
+            // Profile 2 -> 3
+            id(selected_value) = 2;
+          } else if (id(selected_value) == 2) {
+            // Profile 3 -> 1
+            id(selected_value) = 0;
+          } else {
+            // None, clear all
+            id(selected_value) = 0;
+          }
+
+  # Change System-Mode
+  #########################################################################
+  - id: change_mode
+    then:
+      - lambda: |-
+          // Via make_call so set_action runs (climate mode, dry timer, labels)
+          std::string act_mode = std::string(id(select_mode).current_option());
+          auto call = id(select_mode).make_call();
+
+          if (act_mode == "${str_mode_1}") {          // Off
+            call.set_option("${str_mode_2}");         // to Auto
+          } else if (act_mode == "${str_mode_2}") {   // Auto
+            call.set_option("${str_mode_3}");         // to Dry
+          } else {                                    // Dry
+            call.set_option("${str_mode_1}");         // to Off
+          }
+          call.perform();
+
+  # Update Main Label
+  #########################################################################
+  - id: update_labels_page_main
+    mode: restart
+    then:
+      - lvgl.label.update:
+          id: lvgl_lbl_main_state
+          text: !lambda |-
+            if (id(door_open)) return std::string("${str_door_open}");
+            std::string m = std::string(id(select_mode).current_option());
+            if (m == "${str_mode_3}") {
+              // Dry: show remaining time h:mm
+              int rem = std::max(0, id(DRY_HOURS) * 60 - id(dry_elapsed_min));
+              return m + str_sprintf(" %d:%02d", rem / 60, rem % 60);
+            }
+            return m;
+
+  # Set mode of Climate entity
+  #########################################################################
+  - id: set_climate_mode
+    then:
+      - lambda: |-
+          std::string act_mode = std::string(id(select_mode).current_option());
+          auto call = id(pid_chamber_climate).make_call();
+          call.set_target_temperature(id(SET_TEMP));   // SET_TEMP is always the upper limit
+
+          // 0) Re-evaluate humidity hysteresis with the current SET_HUM
+          //    (SET_HUM may have changed by profile / buttons / HA since last reading)
+          const float hum = id(sht4x_chamber_hum).state;
+          if (std::isfinite(hum)) {
+            if (hum > id(SET_HUM) + ${HUM_HYSTERESIS}) {
+              id(hum_heat_active) = true;
+            } else if (hum < id(SET_HUM)) {
+              id(hum_heat_active) = false;
+            }
+          }
+
+          // 1) Would the system heat (ignoring the door)?
+          bool wanted = false;
+          if (id(error_code) != 0) {                   // Safety: no heating during startup/fault
+            wanted = false;
+          } else if (act_mode == "${str_mode_1}") {    // Off
+            wanted = false;
+          } else if (act_mode == "${str_mode_2}") {    // Auto
+            if (id(sw_ext_control).state && id(input_printer_state).state) {
+              wanted = true;                           // coupled + printing -> SET_TEMP
+            } else {
+              wanted = id(hum_heat_active);            // otherwise heat only to hold SET_HUM
+            }
+          } else if (act_mode == "${str_mode_3}") {    // Dry
+            wanted = true;
+          }
+          id(heat_wanted) = wanted;
+
+          // 2) Door warning only relevant while heating is wanted
+          if (!wanted && id(door_open)) {
+            id(door_open) = false;
+            id(door_hist_clear) = true;
+            ESP_LOGW("door", "Door warning cleared (no heating wanted)");
+            id(update_labels_page_main).execute();
+            id(update_status_led).execute();
+          }
+
+          // 3) Door open: pause heating
+          const bool heat = wanted && !id(door_open);
+          call.set_mode(heat ? CLIMATE_MODE_HEAT : CLIMATE_MODE_OFF);
+          call.perform();
+
+          ESP_LOGW("climate", "mode=%s err=%d coupling=%d print=%d hum=%.1f/%d humheat=%d door=%d -> %s @ %d C",
+                   act_mode.c_str(), id(error_code), (int) id(sw_ext_control).state,
+                   (int) id(input_printer_state).state, hum, id(SET_HUM),
+                   (int) id(hum_heat_active), (int) id(door_open),
+                   heat ? "HEAT" : "OFF", id(SET_TEMP));
+
+  # Acknowledge door warning: door is closed -> resume heating immediately
+  #########################################################################
+  - id: door_reset
+    then:
+      - if:
+          condition:
+            lambda: 'return id(door_open);'
+          then:
+            - lambda: |-
+                id(door_open) = false;
+                id(door_hist_clear) = true;
+                ESP_LOGW("door", "Door warning acknowledged");
+            - script.execute: door_changed
+
+  # OTA screen: render now + flush buffer to OLED (loop is blocked during OTA)
+  #########################################################################
+  - id: ota_refresh
+    then:
+      - lambda: |-
+          lv_refr_now(NULL);       // LVGL -> display buffer
+          id(oled_1).update();     // display buffer -> SH1107 via I2C
+
+  # Status page: heater / limit / NTC (+trend) / fan
+  #########################################################################
+  - id: update_status_page
+    mode: restart
+    then:
+      - lvgl.label.update:
+          id: lvgl_lbl_stat_heat
+          text: !lambda 'return str_sprintf("%.0f %%", id(heater_level) * 100.0f);'
+      - lvgl.label.update:
+          id: lvgl_lbl_stat_limit
+          text: !lambda 'return str_sprintf("%.0f %%", id(heater_limit) * 100.0f);'
+      - lvgl.label.update:
+          id: lvgl_lbl_stat_ntc
+          text: !lambda |-
+            const float t = id(ntc_heater_temp).state;
+            if (!std::isfinite(t)) return std::string("--.- °C");
+            // trend arrow from smoothed slope (K/min)
+            const float s = id(ntc_slope) * 60.0f;
+            const char *arrow = (s > 0.5f) ? "\U0000e5d8" : (s < -0.5f) ? "\U0000e5db" : "";
+            return str_sprintf("%s%.1f °C", arrow, t);
+      - lvgl.label.update:
+          id: lvgl_lbl_stat_fan
+          text: !lambda 'return str_sprintf("%.0f %%", id(fan_level) * 100.0f);'
+
+  # Door open/closed changed: pause/resume heating, update display + LED
+  #########################################################################
+  - id: door_changed
+    then:
+      - script.execute: screensaver
+      - script.execute: set_climate_mode
+      - script.execute: update_labels_page_main
+      - script.execute: update_status_led
+
+  # Status LED (segment 1) - priority: error > printing > finished > standby
+  #########################################################################
+  - id: update_status_led
+    mode: restart
+    then:
+      - lambda: |-
+          const float b = ${LED_BRIGHTNESS};
+          if (id(error_code) >= 2) {
+            // Error: red blinking
+            auto call = id(led_status).turn_on();
+            call.set_effect("Error Blink");
+            call.perform();
+            return;
+          }
+          if (id(door_open)) {
+            // Door open: yellow blinking
+            auto call = id(led_status).turn_on();
+            call.set_effect("Door Blink");
+            call.perform();
+            return;
+          }
+          float r, g, bl;
+          if (id(input_printer_state).state) {
+            r = 0.0f; g = 0.0f; bl = 1.0f;          // printing: blue
+          } else if (id(print_finished)) {
+            r = 0.0f; g = 1.0f; bl = 0.0f;          // print finished: green
+          } else if (id(led_standby_on)) {
+            r = 1.0f; g = 1.0f; bl = 1.0f;          // standby: white
+          } else {
+            auto call = id(led_status).turn_off();  // standby timeout: off
+            call.perform();
+            return;
+          }
+          auto call = id(led_status).turn_on();
+          call.set_effect("None");
+          call.set_rgb(r, g, bl);
+          call.set_brightness(b);
+          call.perform();
+
+  # Standby light: on with display, off after LED_TIMEOUT_MIN
+  #########################################################################
+  - id: led_standby_timer
+    mode: restart
+    then:
+      - lambda: 'id(led_standby_on) = true;'
+      - script.execute: update_status_led
+      - delay: !lambda 'return id(LED_TIMEOUT_MIN) * 60000UL;'
+      - lambda: 'id(led_standby_on) = false;'
+      - script.execute: update_status_led
+
+  # Button press acknowledges "print finished" (green -> standby white)
+  #########################################################################
+  - id: led_acknowledge
+    then:
+      - if:
+          condition:
+            lambda: 'return id(print_finished);'
+          then:
+            - lambda: 'id(print_finished) = false;'
+            - script.execute: update_status_led
+
+  # Update error text sensor + error box on display
+  #########################################################################
+  - id: update_error_display
+    mode: restart
+    then:
+      - lambda: |-
+          std::string msg;
+          switch (id(error_code)) {
+            case 0:  msg = "${str_error_ok}"; break;
+            case 1:  msg = "${str_error_start}"; break;
+            case 2:  msg = "${str_error_sht}"; break;
+            case 3:  msg = "${str_error_ntc}"; break;
+            case 4:  msg = "${str_error_heater}"; break;
+            case 5:  msg = "${str_error_overtemp_chamber}"; break;
+            case 6:  msg = "${str_error_overtemp_heater}"; break;
+            case 7:  msg = "${str_error_heat_no_rise}"; break;
+            case 8:  msg = "${str_error_heat_stuck}"; break;
+            default: msg = "Unknown error"; break;
+          }
+          id(txt_system_error).publish_state(msg);
+      - lvgl.label.update:
+          id: lvgl_lbl_error_text
+          text: !lambda 'return id(txt_system_error).state;'
+      - if:
+          condition:
+            lambda: 'return id(error_code) >= 2;'
+          then:
+            - lvgl.widget.show: error_box
+          else:
+            - lvgl.widget.hide: error_box
+      - script.execute: update_status_led
+
+  # Status row: animated icon while fan/heater is running, still icon otherwise
+  #########################################################################
+  - id: update_status_icons
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: 'return id(fan_level) > 0.0f;'
+          then:
+            - lvgl.widget.hide: lvgl_img_topl_fan_still
+            - lvgl.widget.show: lvgl_img_topl_fan
+          else:
+            - lvgl.widget.hide: lvgl_img_topl_fan
+            - lvgl.widget.show: lvgl_img_topl_fan_still
+      - if:
+          condition:
+            lambda: 'return id(heater_level) > 0.0f;'
+          then:
+            - lvgl.widget.hide: lvgl_img_topl_heat_still
+            - lvgl.widget.show: lvgl_img_topl_heat
+          else:
+            - lvgl.widget.hide: lvgl_img_topl_heat
+            - lvgl.widget.show: lvgl_img_topl_heat_still
+
+  # Main page: printer status label (on change + at boot)
+  #########################################################################
+  - id: update_printer_label
+    mode: restart
+    then:
+      - lvgl.label.update:
+          id: lvgl_lbl_main_pr_st
+          text: !lambda |-
+            return id(input_printer_state).state ? std::string("${str_printing}")
+                                                 : std::string("${str_standby}");
+
+  # Status row: connection icon (WiFi + HA API)
+  #########################################################################
+  - id: update_conn_icon
+    mode: restart
+    then:
+      - if:
+          condition:
+            and:
+              - wifi.connected:
+              - api.connected:
+          then:
+            - lvgl.widget.hide: lvgl_img_topl_conn_off
+            - lvgl.widget.show: lvgl_img_topl_conn_on
+          else:
+            - lvgl.widget.hide: lvgl_img_topl_conn_on
+            - lvgl.widget.show: lvgl_img_topl_conn_off
+
+  # Copy the values of the active profile into SET_TEMP / SET_HUM
+  # (called after a profile value was changed in HA)
+  #########################################################################
+  - id: apply_active_profile
+    then:
+      - lambda: |-
+          const std::string p = std::string(id(select_act_profile).current_option());
+          if (p == "Profile 1") {
+            id(SET_TEMP) = id(profile_1_temp); id(SET_HUM) = id(profile_1_hum);
+          } else if (p == "Profile 2") {
+            id(SET_TEMP) = id(profile_2_temp); id(SET_HUM) = id(profile_2_hum);
+          } else if (p == "Profile 3") {
+            id(SET_TEMP) = id(profile_3_temp); id(SET_HUM) = id(profile_3_hum);
+          }
+      - script.execute: set_climate_mode
+      - script.execute: update_settings_page
+
+  # Acknowledge fault - only possible if all checks are currently OK
+  #########################################################################
+  - id: reset_error
+    then:
+      - if:
+          condition:
+            lambda: 'return id(error_code) >= 2 && id(safety_check_code) == 0;'
+          then:
+            - lambda: 'id(error_code) = 0;'
+            - script.execute: update_error_display
+            - script.execute: set_climate_mode
+
+
+############################# SAFETY ####################################
+#########################################################################
+interval:
+  # Status page: refresh live values only while visible and display on
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            and:
+              - lvgl.page.is_showing: lvgl_page_status
+              - lambda: 'return id(oled_1).is_on();'
+          then:
+            - script.execute: update_status_page
+
+  # Connection monitor (WiFi + HA API) - independent of the safety loop
+  - interval: 2s
+    then:
+      - lambda: |-
+          static int prev_conn = -1;
+          const int conn = (wifi::global_wifi_component->is_connected()
+                            && api::global_api_server->is_connected()) ? 1 : 0;
+          if (conn != prev_conn) {
+            prev_conn = conn;
+            id(update_conn_icon).execute();
+          }
+
+  # Dry timer: count minutes, switch to end mode when elapsed
+  - interval: 60s
+    then:
+      - if:
+          condition:
+            lambda: 'return std::string(id(select_mode).current_option()) == "${str_mode_3}";'
+          then:
+            - lambda: |-
+                id(dry_elapsed_min) += 1;
+                if (id(dry_elapsed_min) >= id(DRY_HOURS) * 60) {
+                  const std::string end_mode = std::string(id(select_dry_end_mode).current_option());
+                  ESP_LOGI("dry", "Dry time elapsed -> %s", end_mode.c_str());
+                  auto call = id(select_mode).make_call();
+                  call.set_option(end_mode);
+                  call.perform();
+                }
+            - script.execute: update_labels_page_main
+            - component.update: sens_dry_remaining
+
+  # ======================================================================
+  # SAFETY / CONTROL LOOP (1 s)
+  # Runs as a fixed sequence of steps every second. Results that later
+  # steps need are passed on via globals (sht_ok, ntc_ok,
+  # heater_check_code, fault_changed). Order matters: validate sensors ->
+  # supervise heater -> latch faults -> drive heater -> drive fan -> UI.
+  # ======================================================================
+  - interval: 1s
+    then:
+      # --- Step 1: Sensor validation --------------------------------------
+      # Both temperature sensors must deliver fresh (< timeout), finite and
+      # plausible values. Also checks the hard over-temperature limits.
+      # Output: sht_ok, ntc_ok, safety_check_code (momentary, not latched;
+      # used by reset_error to decide whether a reset is allowed).
+      - lambda: |-
+          const uint32_t now = millis();
+          const uint32_t timeout_ms = ${SAFETY_SENSOR_TIMEOUT_S} * 1000UL;
+          const float t_sht = id(sht4x_chamber_temp).state;
+          const float t_ntc = id(ntc_heater_temp).state;
+
+          id(sht_ok) = id(sht_last_update) != 0
+              && (now - id(sht_last_update)) < timeout_ms
+              && std::isfinite(t_sht)
+              && t_sht > ${SAFETY_MIN_VALID_TEMP};
+          id(ntc_ok) = id(ntc_last_update) != 0
+              && (now - id(ntc_last_update)) < timeout_ms
+              && std::isfinite(t_ntc)
+              && t_ntc > ${SAFETY_MIN_VALID_TEMP}
+              && t_ntc < ${SAFETY_NTC_PLAUSIBLE_MAX};
+
+          int code = 0;
+          if (!id(sht_ok))                              code = 2;  // SHT error
+          else if (!id(ntc_ok))                         code = 3;  // NTC error
+          else if (t_sht >= ${SAFETY_MAX_CHAMBER_TEMP}) code = 5;  // chamber overtemp
+          else if (t_ntc >= ${SAFETY_MAX_NTC_TEMP})     code = 6;  // heater overtemp
+          id(safety_check_code) = code;
+
+      # --- Step 2: Heater supervision (time based) ------------------------
+      # Watches the heater over time (needs valid sensors):
+      # Code 4 = full power for too long
+      # Code 7 = full power but NTC does not rise (heater defect / NTC detached)
+      # Code 8 = heater off but NTC keeps rising above chamber (MOSFET stuck)
+      # Output: heater_check_code (0 = OK).
+      - lambda: |-
+          static uint32_t full_since = 0;      // start of continuous high power
+          static float    full_start_ntc = NAN;
+          static uint32_t off_since = 0;       // start of heater off
+          static float    off_min_ntc = NAN;   // lowest NTC after residual-heat delay
+
+          const uint32_t now = millis();
+          const float t_sht = id(sht4x_chamber_temp).state;
+          const float t_ntc = id(ntc_heater_temp).state;
+          const float lvl = id(heater_level);
+          int heat_code = 0;
+
+          if (!id(sht_ok) || !id(ntc_ok)) {
+            full_since = 0;
+            off_since = 0;
+          } else if (lvl >= ${SAFETY_HEATER_HIGH_LEVEL}) {      // full power
+            off_since = 0;
+            if (full_since == 0) { full_since = now; full_start_ntc = t_ntc; }
+            const uint32_t dur = now - full_since;
+            if (dur > ${SAFETY_HEATER_MAX_FULL_S} * 1000UL) {
+              heat_code = 4;
+            } else if (dur > ${SAFETY_HEAT_CHECK_S} * 1000UL
+                       && (t_ntc - full_start_ntc) < ${SAFETY_HEAT_MIN_RISE}
+                       && t_ntc < (${SAFETY_MAX_NTC_TEMP} - 10.0f)) {
+              heat_code = 7;
+            }
+          } else if (lvl <= 0.0f) {                              // heater off
+            full_since = 0;
+            if (off_since == 0) { off_since = now; off_min_ntc = NAN; }
+            if (now - off_since > ${SAFETY_STUCK_DELAY_S} * 1000UL) {
+              if (!std::isfinite(off_min_ntc) || t_ntc < off_min_ntc) off_min_ntc = t_ntc;
+              if ((t_ntc - off_min_ntc) > ${SAFETY_STUCK_RISE}
+                  && t_ntc > (t_sht + ${SAFETY_STUCK_OFFSET})) {
+                heat_code = 8;
+              }
+            }
+          } else {                                               // partial power = normal regulation
+            full_since = 0;
+            off_since = 0;
+          }
+          id(heater_check_code) = heat_code;
+
+      # --- Step 3: Fault latching -----------------------------------------
+      # Combines step 1 + 2 (sensor faults have priority). During startup
+      # (code 1) waits until all checks pass or the grace time expires.
+      # A fault stays latched until reset_error. Output: error_code,
+      # fault_changed (true if error_code changed in this cycle).
+      - lambda: |-
+          const uint32_t now = millis();
+          const int code = id(safety_check_code);
+          const int new_code = (code != 0) ? code : id(heater_check_code);
+
+          id(fault_changed) = false;
+          if (id(error_code) == 1) {                             // startup
+            if (new_code == 0) {
+              id(error_code) = 0;
+              id(fault_changed) = true;
+            } else if (now > ${SAFETY_STARTUP_GRACE_S} * 1000UL) {
+              id(error_code) = new_code;
+              id(fault_changed) = true;
+            }
+          } else if (id(error_code) == 0 && new_code != 0) {     // new fault
+            id(error_code) = new_code;
+            id(fault_changed) = true;
+            ESP_LOGE("safety", "FAULT %d - heater disabled (T_sht=%.1f, T_ntc=%.1f, lvl=%.2f)",
+                     new_code, id(sht4x_chamber_temp).state, id(ntc_heater_temp).state,
+                     id(heater_level));
+          }
+
+      # --- Step 4: Heater output (limiter + hard shutdown) ----------------
+      # Limiter protects the KSD9700 bimetal switch: predicts the NTC
+      # temperature (rising slope only) and reduces max. power linearly
+      # within HEATER_LIMIT_BAND below HEATER_LIMIT_TEMP.
+      # Output = min(PID request, limit); on any fault: hard OFF every cycle.
+      - lambda: |-
+          if (id(ntc_ok)) {
+            const float t_ntc = id(ntc_heater_temp).state;
+            const float pred = t_ntc + std::max(0.0f, id(ntc_slope)) * ${HEATER_LIMIT_LOOKAHEAD_S};
+            const float lim = (${HEATER_LIMIT_TEMP} - pred) / ${HEATER_LIMIT_BAND};
+            id(heater_limit) = std::min(1.0f, std::max(0.0f, lim));
+          } else {
+            id(heater_limit) = 0.0f;
+          }
+
+          if (id(error_code) != 0) {
+            id(heater_level) = 0.0f;
+            id(output_heater_pwm).set_level(0.0f);
+            if (id(pid_chamber_climate).mode != CLIMATE_MODE_OFF) {
+              auto call = id(pid_chamber_climate).make_call();
+              call.set_mode(CLIMATE_MODE_OFF);
+              call.perform();
+            }
+          } else {
+            id(heater_level) = std::min(id(heater_request), id(heater_limit));
+            id(output_heater_pwm).set_level(id(heater_level));
+          }
+
+      # --- Step 5: Fan control --------------------------------------------
+      # Highest of all requests wins:
+      #   heating (min speed + proportional to heater power), NTC ramp,
+      #   after-run (remove residual heat), full speed on heat-related
+      #   faults, circulation (Auto+printing or Dry, door closed).
+      - lambda: |-
+          static uint32_t last_heat_ms = 0;      // last time the heater was on
+          const uint32_t now = millis();
+          const float t_sht = id(sht4x_chamber_temp).state;
+          const float t_ntc = id(ntc_heater_temp).state;
+          const float FAN_MIN  = ${FAN_MIN_HEATING};
+          const float FAN_CIRC = ${FAN_CIRCULATION};
+          const int err = id(error_code);
+          float fan = 0.0f;
+
+          if (id(heater_level) > 0.0f) last_heat_ms = now;
+
+          // Heating: min speed, rising with heater power
+          if (id(heater_level) > 0.0f) {
+            fan = std::max(fan, FAN_MIN + (1.0f - FAN_MIN) * id(heater_level));
+          }
+
+          // NTC ramp: cools the heater -> limiter allows more power
+          if (id(ntc_ok)) {
+            const float r = (t_ntc - ${FAN_NTC_RAMP_START}) / (${FAN_NTC_RAMP_END} - ${FAN_NTC_RAMP_START});
+            fan = std::max(fan, std::min(1.0f, std::max(0.0f, r)));
+          }
+
+          // After-run: remove residual heat after the heater switched off
+          if (id(heater_level) <= 0.0f && last_heat_ms != 0) {
+            const uint32_t since = now - last_heat_ms;
+            bool run;
+            if (!id(ntc_ok)) {
+              run = since < ${FAN_AFTERRUN_BLIND_S} * 1000UL;      // blind: fixed time
+            } else {
+              const float ref = id(sht_ok) ? (t_sht + ${FAN_AFTERRUN_DELTA}) : ${FAN_AFTERRUN_ABS};
+              run = since < ${FAN_AFTERRUN_MIN_S} * 1000UL || t_ntc > ref;
+            }
+            if (run) fan = std::max(fan, FAN_MIN);
+          } else if (id(ntc_ok) && id(sht_ok) && t_ntc > t_sht + 15.0f) {
+            fan = std::max(fan, FAN_MIN);       // hot heater, no history (e.g. after reboot)
+          }
+
+          // Heat-related faults: full speed
+          if (err == 5 || err == 6 || err == 8) fan = 1.0f;
+
+          // Circulation: Auto + printing, or Dry (no fault, door closed)
+          if (err == 0 && !id(door_open)) {
+            const std::string m = std::string(id(select_mode).current_option());
+            if ((m == "${str_mode_2}" && id(input_printer_state).state) || m == "${str_mode_3}") {
+              fan = std::max(fan, FAN_CIRC);
+            }
+          }
+
+          id(fan_level) = std::min(1.0f, fan);
+          id(output_fan_pwm).set_level(id(fan_level));
+
+      # --- Step 6: Status row icons ---------------------------------------
+      # Fan / heater icons are only redrawn when their on/off state changes.
+      - lambda: |-
+          static int prev_icons = -1;
+          const int icons = (id(fan_level) > 0.0f ? 1 : 0) | (id(heater_level) > 0.0f ? 2 : 0);
+          if (icons != prev_icons) {
+            prev_icons = icons;
+            id(update_status_icons).execute();
+          }
+
+      # --- Step 7: React to fault state changes ---------------------------
+      # New fault: show error box + wake display.
+      # Startup finished / fault cleared: restore the heating mode.
+      - if:
+          condition:
+            lambda: 'return id(fault_changed);'
+          then:
+            - script.execute: update_error_display
+            - if:
+                condition:
+                  lambda: 'return id(error_code) >= 2;'
+                then:
+                  - script.execute: screensaver
+                else:
+                  - script.execute: set_climate_mode

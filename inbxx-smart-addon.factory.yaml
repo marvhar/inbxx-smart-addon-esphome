@@ -1,0 +1,86 @@
+# =========================================================================
+# INBXX Smart Add-on - factory / release build
+#
+# This file is what GitHub Actions builds and publishes. It adds everything
+# needed for provisioning and managed updates on top of the core config.
+# Users who adopt the device in the ESPHome dashboard only get the core
+# config (see dashboard_import) and do not need these extras.
+# =========================================================================
+
+packages:
+  # The complete device configuration
+  core: !include inbxx-smart-addon.yaml
+
+esphome:
+  # Project identification - shown in Home Assistant, used for updates.
+  project:
+    name: marvhar.inbxx-smart-addon
+    version: dev  # replaced by the GitHub release workflow
+
+# Public location of the core config that users adopt in the ESPHome dashboard
+dashboard_import:
+  package_import_url: github://marvhar/inbxx-smart-addon-esphome/inbxx-smart-addon.yaml@main
+
+# WiFi provisioning via Bluetooth LE (Improv), e.g. from Home Assistant
+# or the companion app
+esp32_improv:
+  authorizer: none
+
+# WiFi provisioning via USB (e.g. from the ESP Web Tools install page)
+improv_serial:
+
+# Managed updates: the device checks the manifest on GitHub Pages and
+# Home Assistant shows an update entity with an "Install" button.
+http_request:
+
+ota:
+  - platform: http_request
+    id: ota_http_request
+    # Same update screen as for updates from the ESPHome dashboard
+    on_begin:
+      - lambda: |-
+          id(oled_1).turn_on();
+          lv_obj_move_foreground(id(ota_box));
+      - lvgl.resume:
+      - lvgl.widget.show: ota_box
+      - lvgl.label.update:
+          id: ota_label
+          text: "Updating..."
+      - lvgl.bar.update:
+          id: ota_bar
+          value: 0
+          animated: false
+      - script.execute: ota_refresh
+    on_progress:
+      - lvgl.bar.update:
+          id: ota_bar
+          value: !lambda return x;
+          animated: false
+      - lvgl.label.update:
+          id: ota_label
+          text:
+            format: "Updating %.0f%%"
+            args: [x]
+      - script.execute: ota_refresh
+    on_end:
+      - lvgl.bar.update:
+          id: ota_bar
+          value: 100
+          animated: false
+      - lvgl.label.update:
+          id: ota_label
+          text: "Done, rebooting"
+      - script.execute: ota_refresh
+    on_error:
+      - lvgl.label.update:
+          id: ota_label
+          text:
+            format: "Failed (err %u)"
+            args: [x]
+      - script.execute: ota_refresh
+
+update:
+  - platform: http_request
+    name: Firmware
+    id: update_http_request
+    source: https://marvhar.github.io/inbxx-smart-addon-esphome/firmware/inbxx-smart-addon.manifest.json
