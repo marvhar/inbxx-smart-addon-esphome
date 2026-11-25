@@ -17,7 +17,6 @@
 # PIN_HEATER 10
 # NTC_PIN A7 -> GPIO14
 
-
 substitutions:
   # Strings
   str_printing: "Printing"
@@ -83,7 +82,7 @@ substitutions:
   PIN_NEOPIXEL: GPIO47
 
   # Numbers
-  #NUM_LEDS_COMPL: 6
+  # NUM_LEDS_COMPL: 6
   NUM_LEDS_SEG1: 4
   NUM_LEDS_SEG2: 8
 
@@ -112,7 +111,6 @@ substitutions:
   DOOR_DROP_WINDOW_S: "60"           # ... within this time (s, max. 75)
   DOOR_CLOSE_STABLE_S: "120"         # door closed: no new minimum for this many s ...
   DOOR_CLOSE_RISE_K: "0.5"           # ... or temperature this many K above minimum again
-
 
 globals:
   - id: SET_TEMP
@@ -187,7 +185,7 @@ globals:
 
   - id: error_code
     type: int
-    initial_value: '1' # 0=no Error, 1=StartUp, 2=SHT Error, 3=NTC Error, 4=Heater max. Time, 5=Chamber overtemp, 6=Heater overtemp, 7=Heater no effect, 8=Heater stuck on
+    initial_value: '1'  # 0=no Error, 1=StartUp, 2=SHT Error, 3=NTC Error, 4=Heater max. Time, 5=Chamber overtemp, 6=Heater overtemp, 7=Heater no effect, 8=Heater stuck on
 
   # Safety: timestamp (millis) of the last valid sensor value
   - id: sht_last_update
@@ -294,8 +292,6 @@ globals:
     type: float
     initial_value: '0.0'
 
-
-
 esphome:
   name: inbxx-smart-addon
   friendly_name: INBXX Smart Add-on
@@ -318,9 +314,8 @@ esphome:
       - script.execute: update_settings_page
       - script.execute: update_error_display
       - script.execute: update_printer_label
-      - delay: ${BOOT_SCREEN_SECONDS}s # Boot screen: show logo, then reveal the UI
+      - delay: ${BOOT_SCREEN_SECONDS}s  # Boot screen: show logo, then reveal the UI
       - lvgl.widget.hide: boot_box
-
 
 esp32:
   variant: esp32s3
@@ -345,47 +340,46 @@ ota:
     # Main loop is blocked during OTA -> display is not polled.
     # ota_refresh renders LVGL immediately AND pushes the buffer to the OLED.
     on_begin:
-    - lambda: |-
-        id(oled_1).turn_on();
-        lv_obj_move_foreground(id(ota_box));   // above status row / error box
-    - lvgl.resume:
-    - lvgl.widget.show: ota_box
-    - lvgl.label.update:
-        id: ota_label
-        text: "Updating..."
-    - lvgl.bar.update:
-        id: ota_bar
-        value: 0
-        animated: false
-    - script.execute: ota_refresh
+      - lambda: |-
+          id(oled_1).turn_on();
+          lv_obj_move_foreground(id(ota_box));   // above status row / error box
+      - lvgl.resume:
+      - lvgl.widget.show: ota_box
+      - lvgl.label.update:
+          id: ota_label
+          text: "Updating..."
+      - lvgl.bar.update:
+          id: ota_bar
+          value: 0
+          animated: false
+      - script.execute: ota_refresh
     on_progress:
-    - lvgl.bar.update:
-        id: ota_bar
-        value: !lambda return x;
-        animated: false
-    - lvgl.label.update:
-        id: ota_label
-        text:
-          format: "Updating %.0f%%"
-          args: [x]
-    - script.execute: ota_refresh
+      - lvgl.bar.update:
+          id: ota_bar
+          value: !lambda return x;
+          animated: false
+      - lvgl.label.update:
+          id: ota_label
+          text:
+            format: "Updating %.0f%%"
+            args: [x]
+      - script.execute: ota_refresh
     on_end:
-    - lvgl.bar.update:
-        id: ota_bar
-        value: 100
-        animated: false
-    - lvgl.label.update:
-        id: ota_label
-        text: "Done, rebooting"
-    - script.execute: ota_refresh
+      - lvgl.bar.update:
+          id: ota_bar
+          value: 100
+          animated: false
+      - lvgl.label.update:
+          id: ota_label
+          text: "Done, rebooting"
+      - script.execute: ota_refresh
     on_error:
-    - lvgl.label.update:
-        id: ota_label
-        text:
-          format: "Failed (err %u)"
-          args: [x]
-    - script.execute: ota_refresh
-
+      - lvgl.label.update:
+          id: ota_label
+          text:
+            format: "Failed (err %u)"
+            args: [x]
+      - script.execute: ota_refresh
 
 # WiFi is provisioned by the user: without credentials the device opens a
 # hotspot (named after the device) with a captive portal.
@@ -396,12 +390,10 @@ captive_portal:
 
 web_server:
 
-
 ############### PSRAM ###################################################
 #########################################################################
 psram:
   mode: octal
-
 
 ############### I2C Bus #################################################
 #########################################################################
@@ -411,11 +403,10 @@ i2c:
   id: i2c_bus_1
   frequency: 400kHz
 
-
 ############### FONTS ###################################################
 #########################################################################
 font:
-    # gfonts://family[@weight]
+  # gfonts://family[@weight]
   - file: "gfonts://Roboto"
     id: roboto_l
     size: 28
@@ -425,11 +416,9 @@ font:
     size: 15
     extras:
       - file: "gfonts://Material+Symbols+Outlined"
-        glyphs: [
-          "\U0000e5d8", # arrow_upward   (NTC trend on status page)
-          "\U0000e5db", # arrow_downward
-          ]
-
+        glyphs:
+          - "\U0000e5d8"  # arrow_upward (NTC trend on status page)
+          - "\U0000e5db"  # arrow_downward
 
 ############### IMAGES ##################################################
 #########################################################################
@@ -474,8 +463,6 @@ image:
     id: fan_still
     type: BINARY
 
-
-
 ############### Display Driver ##########################################
 #########################################################################
 # SH1107 128x128px
@@ -484,9 +471,8 @@ display:
     model: "SH1107 128x128"
     id: oled_1
     auto_clear_enabled: false
-    update_interval: 200ms # needed!! 'never' not working!
-    #address: 0x3C
-
+    update_interval: 200ms  # needed!! 'never' not working!
+    # address: 0x3C
 
 ############### LVGL CONFIG, PAGES, WIDGETS #############################
 #########################################################################
@@ -1014,7 +1000,6 @@ lvgl:
 #########################################################################
 #########################################################################
 
-
 ############### Sensors #################################################
 #########################################################################
 sensor:
@@ -1076,7 +1061,7 @@ sensor:
               id: lvgl_lbl_main_temp
               text:
                 format: "Temp.: %.1f°C"
-                args: [ 'x' ]
+                args: ['x']
 
     humidity:
       name: "Relative Humidity"
@@ -1098,8 +1083,7 @@ sensor:
               id: lvgl_lbl_main_hum
               text:
                 format: "Hum.: %.1f%%"
-                args: [ 'x' ]
-
+                args: ['x']
 
   - platform: adc
     id: adc_ntc_in
@@ -1206,7 +1190,6 @@ sensor:
     lambda: |-
       if (std::string(id(select_mode).current_option()) != "${str_mode_3}") return 0;
       return std::max(0, id(DRY_HOURS) * 60 - id(dry_elapsed_min));
-
 
 ############### BINARY SENSORS ##########################################
 #########################################################################
@@ -1357,13 +1340,13 @@ binary_sensor:
                           condition:
                             lvgl.page.is_showing: lvgl_page_set
                           then:
-                              - lambda: 'id(edit_mode) = !id(edit_mode);'
-                              - if:
-                                  condition:
-                                    lambda: 'return !id(edit_mode);'
-                                  then:
-                                    lambda: 'id(selected_value) = 0;' # Prepare for next usage
-                              - script.execute: update_settings_page
+                            - lambda: 'id(edit_mode) = !id(edit_mode);'
+                            - if:
+                                condition:
+                                  lambda: 'return !id(edit_mode);'
+                                then:
+                                  lambda: 'id(selected_value) = 0;'  # Prepare for next usage
+                            - script.execute: update_settings_page
 
                       - if:
                           condition:
@@ -1402,8 +1385,8 @@ binary_sensor:
                     condition:
                       lvgl.page.is_showing: lvgl_page_main
                     then:
-                        - script.execute: change_mode
-                        - script.execute: update_labels_page_main
+                      - script.execute: change_mode
+                      - script.execute: update_labels_page_main
 
                 - if:
                     condition:
@@ -1442,7 +1425,6 @@ binary_sensor:
               else:
                 - script.execute: screensaver
 
-
 ############### BUTTON ##################################################
 #########################################################################
 button:
@@ -1460,7 +1442,6 @@ button:
     icon: mdi:door-closed-lock
     on_press:
       - script.execute: door_reset
-
 
 ############### SELECT ##################################################
 #########################################################################
@@ -1525,8 +1506,7 @@ select:
       # Same path as everywhere else: target temp + heating mode
       - script.execute: set_climate_mode
       - script.execute: update_profile_page
-      - script.execute: update_settings_page # Update values on setpoints page
-
+      - script.execute: update_settings_page  # Update values on setpoints page
 
 ############### SWITCH ##################################################
 #########################################################################
@@ -1548,7 +1528,6 @@ switch:
       then:
         - script.execute: screensaver
         - script.execute: set_climate_mode
-
 
 ############### OUTPUT ##################################################
 #########################################################################
@@ -1583,12 +1562,11 @@ output:
           }
           id(output_heater_pwm).set_level(id(heater_level));
 
-
 ############### LIGHT ###################################################
 #########################################################################
 light:
   - platform: esp32_rmt_led_strip
-    #name: "Main Light"
+    # name: "Main Light"
     id: main_led_bus
     channel_colors: RGB
     pin: ${PIN_NEOPIXEL}
@@ -1636,7 +1614,6 @@ light:
       from: ${NUM_LEDS_SEG1}
       to: ${NUM_LEDS_SEG1 + NUM_LEDS_SEG2 - 1}
 
-
 ############### TEXT SENSOR #############################################
 #########################################################################
 text_sensor:
@@ -1656,7 +1633,6 @@ text_sensor:
     name: "System Error"
     id: txt_system_error
     icon: mdi:alert-circle-outline
-
 
 ############### TEXT (INPUT) ############################################
 #########################################################################
@@ -1708,7 +1684,6 @@ text:
             text: !lambda |-
               return id(profile_3_name).c_str();
     lambda: 'return id(profile_3_name);'
-
 
 ############### NUMBER ##################################################
 #########################################################################
@@ -1855,7 +1830,6 @@ number:
         - script.execute: apply_active_profile
     lambda: 'return id(profile_3_hum);'
 
-
 climate:
   - platform: pid
     id: pid_chamber_climate
@@ -1863,12 +1837,10 @@ climate:
     sensor: sht4x_chamber_temp
     control_parameters:
       kp: 1
-      ki: 0 # leave at 0 because of predictive Limiter!
+      ki: 0  # leave at 0 because of predictive Limiter!
       kd: 0
     default_target_temperature: 30
     heat_output: output_heater_gate
-
-
 
 ############################# SCRIPTS ###################################
 #########################################################################
@@ -1891,8 +1863,8 @@ script:
       - script.execute: update_settings_page
       - script.execute: update_profile_page
 
-    # Updating Set-Point Page
-    #########################################################################
+  # Updating Set-Point Page
+  #########################################################################
   - id: update_settings_page
     then:
       # Highlight only while THIS page is being edited
@@ -1966,7 +1938,7 @@ script:
 
     # Update Profile Page
     #########################################################################
-  - id: update_profile_page # selected_value holds the active profile initially (default 0); UP/DOWN changes selected_value - ACTION activates it -> select_act_profile
+  - id: update_profile_page  # selected_value holds the active profile initially (default 0); UP/DOWN changes selected_value - ACTION activates it -> select_act_profile
     then:
       # Profile 1
       - lvgl.container.update:
@@ -2045,7 +2017,7 @@ script:
             }
 
   #########################################################################
-  - id: update_labels_page_profile # Workaround for updating labels after start
+  - id: update_labels_page_profile  # Workaround for updating labels after start
     then:
       - lvgl.label.update:
           id: lvgl_lbl_prof1_name
@@ -2060,29 +2032,29 @@ script:
           text: !lambda |-
             return id(profile_3_name);
       - lvgl.label.update:
-            id: lvgl_lbl_prof1_temp
-            text: !lambda |-
-              return str_sprintf("%d °C", id(profile_1_temp));
+          id: lvgl_lbl_prof1_temp
+          text: !lambda |-
+            return str_sprintf("%d °C", id(profile_1_temp));
       - lvgl.label.update:
-            id: lvgl_lbl_prof1_hum
-            text: !lambda |-
-              return str_sprintf("%d %%", id(profile_1_hum));
+          id: lvgl_lbl_prof1_hum
+          text: !lambda |-
+            return str_sprintf("%d %%", id(profile_1_hum));
       - lvgl.label.update:
-            id: lvgl_lbl_prof2_temp
-            text: !lambda |-
-              return str_sprintf("%d °C", id(profile_2_temp));
+          id: lvgl_lbl_prof2_temp
+          text: !lambda |-
+            return str_sprintf("%d °C", id(profile_2_temp));
       - lvgl.label.update:
-            id: lvgl_lbl_prof2_hum
-            text: !lambda |-
-              return str_sprintf("%d %%", id(profile_2_hum));
+          id: lvgl_lbl_prof2_hum
+          text: !lambda |-
+            return str_sprintf("%d %%", id(profile_2_hum));
       - lvgl.label.update:
-            id: lvgl_lbl_prof3_temp
-            text: !lambda |-
-              return str_sprintf("%d °C", id(profile_3_temp));
+          id: lvgl_lbl_prof3_temp
+          text: !lambda |-
+            return str_sprintf("%d °C", id(profile_3_temp));
       - lvgl.label.update:
-            id: lvgl_lbl_prof3_hum
-            text: !lambda |-
-              return str_sprintf("%d %%", id(profile_3_hum));
+          id: lvgl_lbl_prof3_hum
+          text: !lambda |-
+            return str_sprintf("%d %%", id(profile_3_hum));
 
   # Inc Value
   #########################################################################
@@ -2502,7 +2474,6 @@ script:
             - lambda: 'id(error_code) = 0;'
             - script.execute: update_error_display
             - script.execute: set_climate_mode
-
 
 ############################# SAFETY ####################################
 #########################################################################
