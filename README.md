@@ -1,3 +1,13 @@
+# ⚠️ BETA – first untested version – for selected beta testers only
+
+> [!CAUTION]
+> This is an early, **untested** release of the firmware. It controls a **heater** –
+> faults in the software or configuration can cause overheating or damage.
+> Use it **only if you were invited as a beta tester**, never leave the device
+> unattended during the beta phase, and make sure a **hardware thermal cut-off**
+> (e.g. KSD9700 70 °C) is installed in the heater supply.
+> Please report any problems via [GitHub Issues](https://github.com/marvhar/inbxx-smart-addon-esphome/issues).
+
 # INBXX Smart Add-on – ESPHome firmware
 
 ESPHome firmware for the **INBXX Heated Semi-smart add-on** (Arduino Nano ESP32).
@@ -21,8 +31,19 @@ ESPHome firmware for the **INBXX Heated Semi-smart add-on** (Arduino Nano ESP32)
 Open the install page and flash via USB from the browser:
 **https://marvhar.github.io/inbxx-smart-addon-esphome/**
 
-WiFi is set up in the installer or via the device hotspot (captive portal).
-Home Assistant discovers the device automatically.
+### WiFi setup
+
+A freshly flashed device has no WiFi credentials. Choose one of these ways:
+
+- **USB (Improv Serial)** – enter your WiFi directly in the install page right after flashing.
+- **Bluetooth (Improv BLE)** – Home Assistant shows the device under
+  *Settings → Devices & services → Discovered* (requires a Bluetooth adapter or
+  Bluetooth proxy in range). The Home Assistant companion app or
+  [improv-wifi.com](https://www.improv-wifi.com) work as well.
+- **Hotspot (captive portal)** – connect to the WiFi network
+  `inbxx-smart-addon-xxxxxx` and enter your credentials in the page that opens.
+
+Once connected, Home Assistant discovers the device automatically.
 
 ## Updates
 
