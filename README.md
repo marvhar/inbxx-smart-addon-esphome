@@ -46,6 +46,12 @@ A freshly flashed device has no WiFi credentials. Choose one of these ways:
 
 Once connected, Home Assistant discovers the device automatically.
 
+## Home Assistant entities
+
+All entities the device provides in Home Assistant (control, sensors, settings,
+lighting, diagnostics) are explained in the
+[Wiki](https://github.com/marvhar/inbxx-smart-addon-esphome/wiki).
+
 ## LED strip
 
 One WS2811 strip on GPIO47 is split into two optional segments, wired in series:
