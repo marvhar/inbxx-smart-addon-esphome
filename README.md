@@ -99,5 +99,16 @@ the Home Assistant update entity – it would replace your build with the releas
 
 Printer status: `M262 P0 B0` (set as output), `M264 P0 B1` / `B0` (start / stop print).
 
+### Required hardware changes
+
+**NTC supply: 3.3 V instead of 5 V.** The NTC voltage divider (10 kΩ pull-up to
+the supply, 100 kΩ NTC to GND, measured on A7) must be powered from the
+**3.3 V pin** of the Nano ESP32. The ESP32 ADC only measures up to ~3.1 V and its
+inputs are not 5 V tolerant. With 5 V the heater temperature is read wrongly
+(the safety checks react to the wrong values) and the input can be damaged.
+
+<!-- TODO: add wiring image, e.g. ![NTC wired to 3.3 V](images/ntc_3v3.jpg) -->
+*Wiring image follows.*
+
 > **Safety:** the software monitoring does not replace a thermal cut-off in the
 > heater supply (e.g. KSD9700 70 °C).
