@@ -6,6 +6,8 @@
 > Use it **only if you were invited as a beta tester**, never leave the device
 > unattended during the beta phase, and make sure a **hardware thermal cut-off**
 > (e.g. KSD9700 70 °C) is installed in the heater supply.
+> **Use of this firmware is entirely at your own risk**
+> for any damage, injury or loss resulting from its use.
 > Please report any problems via [GitHub Issues](https://github.com/marvhar/inbxx-smart-addon-esphome/issues).
 
 # INBXX Smart Add-on – ESPHome firmware
