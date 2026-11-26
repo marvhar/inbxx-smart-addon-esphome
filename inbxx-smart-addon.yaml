@@ -82,9 +82,12 @@ substitutions:
   PIN_NEOPIXEL: GPIO47
 
   # Numbers
-  # NUM_LEDS_COMPL: 6
-  NUM_LEDS_SEG1: 4
-  NUM_LEDS_SEG2: 8
+  # WS2811 strip: segment 1 (status light) followed by segment 2 (extended light).
+  # Both counts are adjustable at runtime (Home Assistant / web UI, 0 = segment
+  # not present); the values below are only the defaults for a fresh device.
+  NUM_LEDS_MAX: "60"                 # max. LEDs on the bus (segment 1 + segment 2)
+  NUM_LEDS_SEG1: "4"                 # default LED count segment 1
+  NUM_LEDS_SEG2: "8"                 # default LED count segment 2
 
   MAX_TEMP: 55.0                     # keep >= 5 K below SAFETY_MAX_CHAMBER_TEMP
   MIN_TEMP: 30.0
@@ -213,6 +216,16 @@ globals:
     restore_value: true
     initial_value: '5'
 
+  - id: led_count_seg1         # number of LEDs in segment 1 (status light)
+    type: int
+    restore_value: true
+    initial_value: '${NUM_LEDS_SEG1}'
+
+  - id: led_count_seg2         # number of LEDs in segment 2 (extended light)
+    type: int
+    restore_value: true
+    initial_value: '${NUM_LEDS_SEG2}'
+
   - id: led_standby_on         # standby light (white) currently active
     type: bool
     initial_value: 'false'
@@ -307,6 +320,15 @@ esphome:
           id(profile_1_temp) = clamp_t(id(profile_1_temp));
           id(profile_2_temp) = clamp_t(id(profile_2_temp));
           id(profile_3_temp) = clamp_t(id(profile_3_temp));
+          // Clamp restored LED counts to the bus size (NUM_LEDS_MAX may have changed)
+          id(led_count_seg1) = std::min(std::max(id(led_count_seg1), 0), ${NUM_LEDS_MAX});
+          id(led_count_seg2) = std::min(std::max(id(led_count_seg2), 0), ${NUM_LEDS_MAX} - id(led_count_seg1));
+      # LED bus: always on, the "Render" effect maps both segments onto the strip
+      - light.turn_on:
+          id: main_led_bus
+          brightness: 100%
+          transition_length: 0s
+          effect: Render
       - script.execute: screensaver
       - script.execute: update_labels_page_main
       - script.execute: update_profile_page
@@ -1532,6 +1554,34 @@ switch:
 ############### OUTPUT ##################################################
 #########################################################################
 output:
+  # Dummy outputs for the virtual LED segment lights (see light: main_led_bus).
+  # The lights only provide state/effects; main_led_bus renders them onto the strip.
+  - platform: template
+    id: out_led_seg1_r
+    type: float
+    write_action: &led_dummy_write
+      - lambda: 'return;'
+  - platform: template
+    id: out_led_seg1_g
+    type: float
+    write_action: *led_dummy_write
+  - platform: template
+    id: out_led_seg1_b
+    type: float
+    write_action: *led_dummy_write
+  - platform: template
+    id: out_led_seg2_r
+    type: float
+    write_action: *led_dummy_write
+  - platform: template
+    id: out_led_seg2_g
+    type: float
+    write_action: *led_dummy_write
+  - platform: template
+    id: out_led_seg2_b
+    type: float
+    write_action: *led_dummy_write
+
   - platform: ledc
     pin: ${PIN_FAN}
     id: output_fan_pwm
@@ -1565,23 +1615,56 @@ output:
 ############### LIGHT ###################################################
 #########################################################################
 light:
+  # Physical WS2811 bus, sized for NUM_LEDS_MAX. It is switched on at boot with
+  # the "Render" effect, which copies the current color of the two virtual
+  # lights below onto the strip:
+  #   LED 0 .. n1-1        -> "Light"          (segment 1, status)
+  #   LED n1 .. n1+n2-1    -> "Extended Light" (segment 2)
+  #   rest                 -> off
+  # n1/n2 come from the "LED Count" numbers, so the layout can change at runtime.
   - platform: esp32_rmt_led_strip
-    # name: "Main Light"
     id: main_led_bus
     channel_colors: RGB
     pin: ${PIN_NEOPIXEL}
-    num_leds: ${NUM_LEDS_SEG1 + NUM_LEDS_SEG2}
+    num_leds: ${NUM_LEDS_MAX}
     chipset: WS2811
     internal: true
+    restore_mode: ALWAYS_OFF          # switched on with the effect in on_boot
+    default_transition_length: 0s
+    effects:
+      - addressable_lambda:
+          name: "Render"
+          update_interval: 20ms
+          lambda: |-
+            // Current output of a virtual light (incl. transitions / strobe), gamma is applied by the bus
+            auto color_of = [](light::LightState *l) -> Color {
+              const auto &v = l->current_values;
+              const float s = v.get_state() * v.get_brightness() * 255.0f;
+              return Color((uint8_t) (v.get_red() * s + 0.5f),
+                           (uint8_t) (v.get_green() * s + 0.5f),
+                           (uint8_t) (v.get_blue() * s + 0.5f));
+            };
+            const int n1 = id(led_count_seg1);
+            const int n2 = id(led_count_seg2);
+            const Color c1 = color_of(id(led_status));
+            const Color c2 = color_of(id(led_extended));
+            for (int i = 0; i < it.size(); i++) {
+              if (i < n1) {
+                it[i] = c1;
+              } else if (i < n1 + n2) {
+                it[i] = c2;
+              } else {
+                it[i] = Color::BLACK;
+              }
+            }
 
   # Segment 1: status light (controlled by update_status_led)
-  - platform: partition
+  - platform: rgb
     name: "Light"
     id: led_status
-    segments:
-      id: main_led_bus
-      from: 0
-      to: ${NUM_LEDS_SEG1 - 1}
+    red: out_led_seg1_r
+    green: out_led_seg1_g
+    blue: out_led_seg1_b
     default_transition_length: 300ms
     effects:
       - strobe:
@@ -1607,12 +1690,13 @@ light:
             - state: false
               duration: 800ms
 
-  - platform: partition
+  # Segment 2: extended light (free for the user / Home Assistant)
+  - platform: rgb
     name: "Extended Light"
-    segments:
-      id: main_led_bus
-      from: ${NUM_LEDS_SEG1}
-      to: ${NUM_LEDS_SEG1 + NUM_LEDS_SEG2 - 1}
+    id: led_extended
+    red: out_led_seg2_r
+    green: out_led_seg2_g
+    blue: out_led_seg2_b
 
 ############### TEXT SENSOR #############################################
 #########################################################################
@@ -1622,8 +1706,6 @@ text_sensor:
       name: "IP Address"
     ssid:
       name: "Wi-Fi SSID"
-    bssid:
-      name: "Wi-Fi BSSID"
 
   - platform: version
     name: "ESPHome Version"
@@ -1703,6 +1785,43 @@ number:
         - lambda: |-
             id(LED_TIMEOUT_MIN) = (int) x;
             id(num_led_timeout).publish_state(x);
+
+  # LED counts per segment (0 = segment not installed). Takes effect immediately.
+  - platform: template
+    name: "Status LED Count"
+    id: num_led_count_seg1
+    icon: mdi:led-strip
+    entity_category: config
+    mode: box
+    step: 1
+    min_value: 0
+    max_value: ${NUM_LEDS_MAX}
+    lambda: 'return id(led_count_seg1);'
+    set_action:
+      then:
+        - lambda: |-
+            // Segment 1 has priority; shrink segment 2 if the sum would exceed the bus
+            id(led_count_seg1) = std::min(std::max((int) x, 0), ${NUM_LEDS_MAX});
+            id(led_count_seg2) = std::min(id(led_count_seg2), ${NUM_LEDS_MAX} - id(led_count_seg1));
+            id(num_led_count_seg1).publish_state(id(led_count_seg1));
+            id(num_led_count_seg2).publish_state(id(led_count_seg2));
+
+  - platform: template
+    name: "Extended LED Count"
+    id: num_led_count_seg2
+    icon: mdi:led-strip-variant
+    entity_category: config
+    mode: box
+    step: 1
+    min_value: 0
+    max_value: ${NUM_LEDS_MAX}
+    lambda: 'return id(led_count_seg2);'
+    set_action:
+      then:
+        - lambda: |-
+            // Limited to the LEDs left over after segment 1
+            id(led_count_seg2) = std::min(std::max((int) x, 0), ${NUM_LEDS_MAX} - id(led_count_seg1));
+            id(num_led_count_seg2).publish_state(id(led_count_seg2));
 
   - platform: template
     name: "Dry Duration"
