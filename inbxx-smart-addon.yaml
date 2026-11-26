@@ -327,7 +327,6 @@ esphome:
       - light.turn_on:
           id: main_led_bus
           brightness: 100%
-          transition_length: 0s
           effect: Render
       - script.execute: screensaver
       - script.execute: update_labels_page_main
