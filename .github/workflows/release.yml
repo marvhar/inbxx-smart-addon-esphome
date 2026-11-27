@@ -110,12 +110,17 @@ jobs:
         env:
           RELEASE_SUMMARY: ${{ steps.find.outputs.body }}
           RELEASE_URL: ${{ steps.find.outputs.url }}
+          # Shown as title of the Home Assistant update entity and on the
+          # install page. The build sets it to esphome.project.name, which
+          # must contain the "author." namespace.
+          DISPLAY_NAME: INBXX Smart Add-on
         run: |
           set -euo pipefail
           mkdir -p patched
           for manifest in assets/*.manifest.json; do
             jq --arg summary "${RELEASE_SUMMARY}" --arg url "${RELEASE_URL}" \
-              '.builds[].ota |= (.summary = $summary | .release_url = $url)' \
+              --arg name "${DISPLAY_NAME}" \
+              '.name = $name | .builds[].ota |= (.summary = $summary | .release_url = $url)' \
               "${manifest}" > "patched/$(basename "${manifest}")"
           done
 
