@@ -120,7 +120,6 @@ substitutions:
   MIN_LED_TIMEOUT: "1"               # standby light timeout: adjustable from ... (min)
   MAX_LED_TIMEOUT: "60"              # ... to (min)
 
-
 globals:
   - id: SET_TEMP
     type: int
@@ -1953,7 +1952,6 @@ number:
               return str_sprintf("%.0f %%", x);
         - script.execute: apply_active_profile
     lambda: 'return id(profile_3_hum);'
-
 
 ############### CLIMATE #################################################
 #########################################################################
