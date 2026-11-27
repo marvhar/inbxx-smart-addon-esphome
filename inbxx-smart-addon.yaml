@@ -37,6 +37,7 @@ substitutions:
   str_error_heat_no_rise: "Heater no effect"
   str_error_heat_stuck: "Heater stuck on"
   str_error_reset_hint: "Hold to reset"
+  str_door_open: "Door open"
 
   # Safety
   SAFETY_MAX_CHAMBER_TEMP: "60.0"    # SHT4x: chamber shutdown limit (°C)
@@ -60,6 +61,13 @@ substitutions:
   HEATER_LIMIT_BAND: "8.0"           # band below it with linear power reduction (K)
   HEATER_LIMIT_LOOKAHEAD_S: "30.0"   # prediction: T + slope * this time (s)
 
+  # PID Control Values
+  PID_KP: "2.8"
+  PID_KI: "0.0"                      # leave at 0 because of predictive Limiter!
+  PID_KD: "1.5"
+
+  HUM_HYSTERESIS: "3"                # humidity hold: heat above SET_HUM + this value, off below SET_HUM
+
   # Fan control (fan behind heating element, values 0..1)
   FAN_MIN_HEATING: "0.4"             # min. speed as soon as the heater is on
   FAN_NTC_RAMP_START: "45.0"         # NTC from here: fan ramps up linearly ...
@@ -69,6 +77,12 @@ substitutions:
   FAN_AFTERRUN_ABS: "40.0"           # after-run NTC limit if SHT is invalid (°C)
   FAN_AFTERRUN_BLIND_S: "180"        # after-run time if NTC is invalid (s)
   FAN_CIRCULATION: "0.25"            # circulation in Auto+printing or Dry
+
+  # Open door detection via SHT4x (mounted at the door)
+  DOOR_DROP_K: "2.0"                 # door open: temperature drops by at least this many K ...
+  DOOR_DROP_WINDOW_S: "60"           # ... within this time (s, max. 75)
+  DOOR_CLOSE_STABLE_S: "120"         # door closed: no new minimum for this many s ...
+  DOOR_CLOSE_RISE_K: "0.5"           # ... or temperature this many K above minimum again
 
   # IOs
   PIN_NTC: GPIO14
@@ -81,7 +95,6 @@ substitutions:
   PIN_BUTTON_ACTION: GPIO9
   PIN_NEOPIXEL: GPIO47
 
-  # Numbers
   # WS2811 strip: segment 1 (status light) followed by segment 2 (extended light).
   # Both counts are adjustable at runtime (Home Assistant / web UI, 0 = segment
   # not present); the values below are only the defaults for a fresh device.
@@ -89,10 +102,14 @@ substitutions:
   NUM_LEDS_SEG1: "4"                 # default LED count segment 1
   NUM_LEDS_SEG2: "8"                 # default LED count segment 2
 
+  # UI/HA
   MAX_TEMP: 55.0                     # keep >= 5 K below SAFETY_MAX_CHAMBER_TEMP
   MIN_TEMP: 30.0
   MAX_HUM: 100
   MIN_HUM: 20
+
+  SCREEN_OFF_SECONDS: 45
+  BOOT_SCREEN_SECONDS: 3             # duration of boot screen (logo) after start
 
   MIN_DRY_HOURS: "1"
   MAX_DRY_HOURS: "12"
@@ -102,18 +119,6 @@ substitutions:
   LED_BRIGHTNESS: "0.8"              # brightness 0..1
   MIN_LED_TIMEOUT: "1"               # standby light timeout: adjustable from ... (min)
   MAX_LED_TIMEOUT: "60"              # ... to (min)
-
-  HUM_HYSTERESIS: "3"                # humidity hold: heat above SET_HUM + this value, off below SET_HUM
-
-  SCREEN_OFF_SECONDS: 45
-  BOOT_SCREEN_SECONDS: 3             # duration of boot screen (logo) after start
-
-  # Open door detection via SHT4x (mounted at the door)
-  str_door_open: "Door open"
-  DOOR_DROP_K: "2.0"                 # door open: temperature drops by at least this many K ...
-  DOOR_DROP_WINDOW_S: "60"           # ... within this time (s, max. 75)
-  DOOR_CLOSE_STABLE_S: "120"         # door closed: no new minimum for this many s ...
-  DOOR_CLOSE_RISE_K: "0.5"           # ... or temperature this many K above minimum again
 
 globals:
   - id: SET_TEMP
@@ -1948,15 +1953,17 @@ number:
         - script.execute: apply_active_profile
     lambda: 'return id(profile_3_hum);'
 
+############### CLIMATE #################################################
+#########################################################################
 climate:
   - platform: pid
     id: pid_chamber_climate
     name: "Chamber Thermostat"
     sensor: sht4x_chamber_temp
     control_parameters:
-      kp: 1
-      ki: 0  # leave at 0 because of predictive Limiter!
-      kd: 0
+      kp: ${PID_KP}
+      ki: ${PID_KI}  # leave at 0 because of predictive Limiter!
+      kd: ${PID_KD}
     default_target_temperature: 30
     heat_output: output_heater_gate
 
