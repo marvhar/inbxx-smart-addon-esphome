@@ -1,13 +1,38 @@
 name: Release Drafter
 
+# Creates or updates the draft release with a CalVer version (YY.M.N) and
+# empties its assets so the Build workflow can attach a fresh set.
+#
+# Based on esphome/workflows draft-calver-release.yml, extended with a beta
+# channel: a draft can be tagged YY.M.N-beta. The firmware then reports this
+# version, so Home Assistant shows the beta marker. Beta releases are normal
+# (not pre-) releases and are offered to every device as an update.
+#
+# Beta marker:
+#   push to main       -> beta if the draft already is a beta OR the merged
+#                         pull request carries the label "beta"
+#   workflow_dispatch  -> channel "beta" / "stable" sets it explicitly,
+#                         "keep" leaves the current draft as it is
+
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Release channel of the draft"
+        required: true
+        default: keep
+        type: choice
+        options:
+          - keep
+          - beta
+          - stable
 
 permissions:
   contents: write  # create/update the draft release
-  pull-requests: read  # categorize merged pull requests
+  pull-requests: read  # categorize merged pull requests, read PR labels
 
 concurrency:
   group: release-drafter
@@ -16,8 +41,133 @@ concurrency:
 jobs:
   release-drafter:
     name: Update draft release
-    # Computes the next CalVer version (YY.M.N, reusing the current draft's
-    # sequence number) and runs release-drafter with it. Reads this repo's
-    # .github/release-drafter.yml for the changelog categories, then empties
-    # the draft's assets so the Build workflow can attach a fresh set.
-    uses: esphome/workflows/.github/workflows/draft-calver-release.yml@7f0b0f230ba1b9fa1361e699b3a2043c92f0d3f3  # 2026.11.1
+    runs-on: ubuntu-latest
+    steps:
+      - name: Calculate calver version
+        id: calver
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+          CHANNEL: ${{ inputs.channel }}
+          BETA_LABEL: beta
+          BETA_SUFFIX: -beta
+        run: |
+          set -euo pipefail
+          # CalVer scheme: YY.M.N[-beta]
+          #   YY = year mod 100 (e.g. 2026 -> 26)
+          #   M  = month, no zero padding (e.g. April -> 4)
+          #   N  = sequential release of that month, starting at 1
+          #        (shared by beta and stable releases)
+          year=$(date -u +%y)
+          month=$(date -u +%-m)
+          prefix="${year}.${month}."
+
+          # The newest 100 releases always include everything tagged in the
+          # current month, so one page is enough to find the highest sequence.
+          if ! releases=$(gh api "repos/${GH_REPO}/releases?per_page=100"); then
+            echo "::error::Failed to list releases"
+            exit 1
+          fi
+
+          # Sequence number of a tag "YY.M.N" or "YY.M.N-beta", else null
+          seq_of='if startswith($prefix) then (ltrimstr($prefix) | sub($suffix + "$"; "") | tonumber?) else null end'
+
+          # Highest existing sequence (draft or published) in the current month
+          latest_seq=$(jq -r --arg prefix "${prefix}" --arg suffix "${BETA_SUFFIX}" \
+            "[.[] | .tag_name | ${seq_of} | select(. != null)] | max // 0" \
+            <<< "${releases}")
+
+          if [[ "${latest_seq}" -eq 0 ]]; then
+            seq=1
+          else
+            # If the release at the highest seq is still a draft, reuse it
+            # so subsequent pushes update the same draft. Otherwise start a new one.
+            is_draft=$(jq -r --arg prefix "${prefix}" --arg suffix "${BETA_SUFFIX}" \
+              --argjson seq "${latest_seq}" \
+              "[.[] | select((.tag_name | ${seq_of}) == \$seq)] | first | .draft" \
+              <<< "${releases}")
+            if [[ "${is_draft}" == "true" ]]; then
+              seq=${latest_seq}
+            else
+              seq=$((latest_seq + 1))
+            fi
+          fi
+
+          # Current draft (ignore untagged-* placeholders)
+          draft_tag=$(jq -r \
+            '[.[] | select(.draft == true and (.tag_name | startswith("untagged-") | not))]
+              | first | .tag_name // ""' \
+            <<< "${releases}")
+
+          beta=false
+          if [[ "${EVENT}" == "workflow_dispatch" && "${CHANNEL}" != "keep" ]]; then
+            [[ "${CHANNEL}" == "beta" ]] && beta=true
+          else
+            # Keep the marker of the current draft
+            [[ "${draft_tag}" == *"${BETA_SUFFIX}" ]] && beta=true
+            # Merged pull request with the beta label
+            if [[ "${EVENT}" == "push" && "${beta}" == "false" ]]; then
+              if ! labels=$(gh api "repos/${GH_REPO}/commits/${SHA}/pulls" \
+                  --jq '[.[].labels[].name] | join(",")'); then
+                echo "::warning::Could not read pull request labels of ${SHA}"
+                labels=""
+              fi
+              [[ ",${labels}," == *",${BETA_LABEL},"* ]] && beta=true
+            fi
+          fi
+
+          version="${prefix}${seq}"
+          [[ "${beta}" == "true" ]] && version="${version}${BETA_SUFFIX}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Calculated calver version: ${version} (current draft: ${draft_tag:-none})"
+
+      - uses: release-drafter/release-drafter@v7.11.0
+        id: drafter
+        with:
+          version: ${{ steps.calver.outputs.version }}
+          tag: ${{ steps.calver.outputs.version }}
+          name: ${{ steps.calver.outputs.version }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      # release-drafter has just rewritten the body from the template, which
+      # re-adds its ASSETS_PENDING warning: the draft now declares that it has
+      # no build assets, so make that true. No build is in flight yet - the
+      # Build workflow only starts once this workflow has completed.
+      - name: Delete stale assets from the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ steps.drafter.outputs.id }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${RELEASE_ID}" ]]; then
+            echo "::error::release-drafter did not report a release id"
+            exit 1
+          fi
+          # Never touch a published release: deleting its assets would be
+          # irreversible.
+          if ! release=$(gh api "repos/${GH_REPO}/releases/${RELEASE_ID}"); then
+            echo "::error::Failed to fetch release ${RELEASE_ID}"
+            exit 1
+          fi
+          if [[ "$(jq -r '.draft' <<< "${release}")" != "true" ]]; then
+            echo "::error::Release ${RELEASE_ID} is not a draft; refusing to delete its assets"
+            exit 1
+          fi
+          if ! asset_ids=$(gh api "repos/${GH_REPO}/releases/${RELEASE_ID}/assets" \
+              --paginate --jq '.[].id'); then
+            echo "::error::Failed to list assets for release ${RELEASE_ID}"
+            exit 1
+          fi
+          # A bare `while read <<< ""` would loop once on an empty id.
+          if [[ -z "${asset_ids}" ]]; then
+            echo "Draft release ${RELEASE_ID} has no assets to delete"
+            exit 0
+          fi
+          while read -r id; do
+            echo "Deleting asset ${id}"
+            gh api "repos/${GH_REPO}/releases/assets/${id}" --method DELETE --silent
+          done <<< "${asset_ids}"

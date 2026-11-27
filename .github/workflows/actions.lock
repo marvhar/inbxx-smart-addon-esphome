@@ -10,11 +10,9 @@ workflows:
         - 'actions/deploy-pages@v5.0.1'
         - 'actions/jekyll-build-pages@v1.0.13'
         - 'actions/upload-pages-artifact@v5.0.0'
-    '.github/workflows/release-drafter.yml': []
+    '.github/workflows/release-drafter.yml':
+        - 'release-drafter/release-drafter@v7.11.0'
     '.github/workflows/release.yml': []
-    '.github/workflows/repository-generated.yml':
-        - 'actions/checkout@v7.0.1'
-        - 'peter-evans/create-issue-from-file@v6.0.0'
     '.github/workflows/verify-lockfile.yml':
         - 'actions/checkout@v7.0.1'
     '.github/workflows/yaml-lint.yml':
@@ -52,8 +50,8 @@ dependencies:
         repo_id: 496012378
         uses:
             - 'actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f'
-    'peter-evans/create-issue-from-file@v6.0.0':
-        ref: 'v6.0.0'
-        commit: 'sha1-fca9117c27cdc29c6c4db3b86c48e4115a786710'
-        owner_id: 18365890
-        repo_id: 195505864
+    'release-drafter/release-drafter@v7.11.0':
+        ref: 'v7.11.0'
+        commit: 'sha1-d1a19e60e81a7e650d00a7de9277f87e439117ea'
+        owner_id: 58292376
+        repo_id: 139022359
