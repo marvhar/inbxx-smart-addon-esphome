@@ -1589,7 +1589,7 @@ output:
   - platform: ledc
     pin: ${PIN_FAN}
     id: output_fan_pwm
-    frequency: 25kHz
+    frequency: 1kHz
     min_power: 20%
     zero_means_zero: true   # 0 = really off (otherwise min_power)
 
